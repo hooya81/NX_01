@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    NX 안에서 실행되는 브리지 DLL (Named Pipe 서버).
+    NX Open .NET은 .NET Framework 기반이므로 net48 / x64 고정.
+  -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>NxOpenFile.NxBridge</RootNamespace>
+    <AssemblyName>NxOpenFile.NxBridge</AssemblyName>
+    <LangVersion>7.3</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+
+    <!--
+      NX 설치 경로. 환경변수 UGII_BASE_DIR 사용
+      (예: C:\Program Files\Siemens\NX2606).
+      환경변수가 없으면 아래 값을 절대 경로로 직접 수정하세요.
+    -->
+    <NxManagedDir>$(UGII_BASE_DIR)\NXBIN\managed</NxManagedDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- NX 런타임이 제공하므로 출력 폴더로 복사하지 않음 (Private=false) -->
+    <Reference Include="NXOpen">
+      <HintPath>$(NxManagedDir)\NXOpen.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="NXOpenUI">
+      <HintPath>$(NxManagedDir)\NXOpenUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- VS에 .NET Framework 4.8 Targeting Pack이 없어도 빌드되도록 -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <Target Name="CheckNxOpenReference" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(NxManagedDir)\NXOpen.dll')"
+           Text="NXOpen.dll을 찾을 수 없습니다: $(NxManagedDir)\NXOpen.dll  환경변수 UGII_BASE_DIR(NX 설치 경로)를 설정한 뒤 Visual Studio를 다시 시작하세요." />
+  </Target>
+
+</Project>
