@@ -28,6 +28,11 @@
       <HintPath>$(NxManagedDir)\NXOpen.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- PartLoadStatus 등의 기반 형식(TransientObject)이 들어 있음 -->
+    <Reference Include="NXOpen.Utilities">
+      <HintPath>$(NxManagedDir)\NXOpen.Utilities.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="NXOpenUI">
       <HintPath>$(NxManagedDir)\NXOpenUI.dll</HintPath>
       <Private>false</Private>
