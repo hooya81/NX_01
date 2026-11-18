@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.IO.Pipes;
+using System.Threading;
 
 namespace NxOpenFile.App
 {
@@ -29,9 +30,10 @@ namespace NxOpenFile.App
             return Send(BridgeProtocol.CmdOpen + BridgeProtocol.Separator + path);
         }
 
-        /// <summary>브리지 DLL이 로드되어 있는지 확인합니다.</summary>
+        /// <summary>브리지 DLL이 로드되어 있고 응답하는지 확인합니다.</summary>
         public static bool IsNxReady()
         {
+            if (!IsBridgeListening()) return false;
             try
             {
                 return Send(BridgeProtocol.CmdPing).Success;
@@ -39,6 +41,41 @@ namespace NxOpenFile.App
             catch (Exception)
             {
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// NX 안의 브리지가 파이프를 열어 두었는지 예외 없이 확인합니다.
+        /// (없는 파이프에 Connect하면 TimeoutException이 나서 디버거가 멈추므로 먼저 확인)
+        /// 브리지는 요청 하나를 처리할 때마다 파이프를 다시 만들기 때문에 잠깐 재시도합니다.
+        /// </summary>
+        public static bool IsBridgeListening()
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                bool? exists = PipeExists(BridgeProtocol.PipeName);
+                if (exists != false) return true; // 존재하거나, 확인 자체가 불가능하면 연결 시도에 맡김
+                Thread.Sleep(100);
+            }
+            return false;
+        }
+
+        /// <returns>true=있음, false=없음, null=목록을 읽을 수 없음</returns>
+        private static bool? PipeExists(string pipeName)
+        {
+            try
+            {
+                foreach (string pipe in Directory.GetFiles(@"\\.\pipe\"))
+                {
+                    if (string.Equals(Path.GetFileName(pipe), pipeName, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+                return false;
+            }
+            catch (Exception)
+            {
+                // 일부 시스템 파이프 이름에 경로에 쓸 수 없는 문자가 있으면 목록 조회가 실패할 수 있음
+                return null;
             }
         }
 

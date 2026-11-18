@@ -22,7 +22,19 @@ namespace NxOpenFile.App
             bool ready = await Task.Run(() => NxBridgeClient.IsNxReady());
             SetStatus(ready
                 ? "NX 연결됨. [NX에서 파일 열기]를 누르세요."
-                : "NX에 연결되지 않음. NX에서 NxOpenFile.NxBridge.dll을 먼저 실행하세요 (Ctrl+U).");
+                : "NX에 연결되지 않음. NX에서 NxOpenFile.NxBridge.dll을 먼저 실행하세요 (Ctrl+U).\n파이프: " + BridgeProtocol.PipeName);
+        }
+
+        private void ShowNotConnected()
+        {
+            SetStatus("NX에 연결되지 않음. 파이프: " + BridgeProtocol.PipeName);
+            MessageBox.Show(this,
+                "실행 중인 NX에 연결할 수 없습니다.\n\n" +
+                "NX에서 파일 → 실행 → NX Open(Ctrl+U)으로\n" +
+                "NxOpenFile.NxBridge.dll을 먼저 실행했는지 확인하세요.\n\n" +
+                "이 프로그램이 찾는 파이프: " + BridgeProtocol.PipeName + "\n" +
+                "(NX의 브리지 시작 메시지에 표시된 파이프 이름과 같아야 합니다)",
+                "NX 연결 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         private async void btnOpen_Click(object sender, EventArgs e)
@@ -50,6 +62,12 @@ namespace NxOpenFile.App
 
             try
             {
+                if (!await Task.Run(() => NxBridgeClient.IsBridgeListening()))
+                {
+                    ShowNotConnected();
+                    return;
+                }
+
                 // 파이프 통신은 UI 스레드를 막지 않도록 백그라운드에서 실행
                 BridgeResult result = await Task.Run(() => NxBridgeClient.OpenFile(path));
 
@@ -66,12 +84,8 @@ namespace NxOpenFile.App
             }
             catch (TimeoutException)
             {
-                SetStatus("NX에 연결되지 않음");
-                MessageBox.Show(this,
-                    "실행 중인 NX에 연결할 수 없습니다.\n\n" +
-                    "NX에서 파일 → 실행 → NX Open(Ctrl+U)으로\n" +
-                    "NxOpenFile.NxBridge.dll을 먼저 실행했는지 확인하세요.",
-                    "NX 연결 실패", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                // 파이프는 있지만 NX가 3초 안에 연결을 받지 못한 경우 (다른 요청 처리 중 등)
+                ShowNotConnected();
             }
             catch (Exception ex)
             {
