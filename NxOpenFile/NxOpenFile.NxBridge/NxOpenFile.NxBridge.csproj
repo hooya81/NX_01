@@ -44,6 +44,20 @@
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
   </ItemGroup>
 
+  <!--
+    NXOpen*.dll이 출력 폴더에 복사되면 NX가 우리 DLL을 로드할 때 그 복사본을 별도로 불러와
+    Session.GetSession()이 실패합니다 (ArgumentOutOfRangeException / NXOpen 로드 실패).
+    참조의 "로컬 복사"가 True로 바뀌어도 빌드 후 자동으로 지웁니다.
+  -->
+  <Target Name="RemoveCopiedNxOpenDlls" AfterTargets="Build">
+    <ItemGroup>
+      <_CopiedNxOpenFiles Include="$(OutDir)NXOpen*.dll;$(OutDir)NXOpen*.pdb;$(OutDir)NXOpen*.xml" />
+    </ItemGroup>
+    <Warning Condition="'@(_CopiedNxOpenFiles)' != ''"
+             Text="출력 폴더에 복사된 NXOpen 파일을 삭제합니다 (참조의 '로컬 복사'를 False로 두세요): @(_CopiedNxOpenFiles)" />
+    <Delete Files="@(_CopiedNxOpenFiles)" />
+  </Target>
+
   <Target Name="CheckNxOpenReference" BeforeTargets="ResolveAssemblyReferences">
     <Error Condition="!Exists('$(NxManagedDir)\NXOpen.dll')"
            Text="NXOpen.dll을 찾을 수 없습니다: $(NxManagedDir)\NXOpen.dll  환경변수 UGII_BASE_DIR(NX 설치 경로)를 설정한 뒤 Visual Studio를 다시 시작하세요." />

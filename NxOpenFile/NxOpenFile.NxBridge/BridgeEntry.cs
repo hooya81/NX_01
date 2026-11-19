@@ -70,7 +70,36 @@ namespace NxOpenFile.NxBridge
                 };
                 _serverThread.Start();
                 Log("브리지 시작. 파이프=" + BridgeProtocol.PipeName);
+                LogLoadedNxAssemblies();
                 return true;
+            }
+        }
+
+        /// <summary>
+        /// 문제 진단용: 현재 NX에 로드된 NXOpen 어셈블리와 위치를 기록합니다.
+        /// 같은 이름이 두 번 나오거나 NX 설치 폴더(NXBIN\managed) 밖에서 로드됐다면
+        /// 빌드 출력 폴더에 NXOpen DLL이 복사된 것입니다.
+        /// (NXOpen 형식을 쓰지 않으므로 NXOpen 로드가 실패해도 동작함)
+        /// </summary>
+        private static void LogLoadedNxAssemblies()
+        {
+            try
+            {
+                Log("브리지 DLL 위치: " + typeof(BridgeEntry).Assembly.Location);
+                foreach (System.Reflection.Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    string name = assembly.GetName().Name;
+                    if (!name.StartsWith("NXOpen", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    string location;
+                    try { location = assembly.IsDynamic ? "(dynamic)" : assembly.Location; }
+                    catch (Exception) { location = "?"; }
+                    Log("  로드된 어셈블리: " + assembly.FullName + " @ " + location);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("어셈블리 목록 기록 실패: " + ex.Message);
             }
         }
 
