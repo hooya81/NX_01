@@ -2,18 +2,21 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
+using System.Reflection;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Threading;
 using NXOpen;
-using NXOpen.Assemblies;
 
 namespace NxOpenFile.NxBridge
 {
     /// <summary>
-    /// 실행 중인 NX 안에서 동작하는 브리지 DLL.
-    /// 외부 EXE는 NX 세션에 직접 붙을 수 없으므로, 이 DLL이 NX 안에서 Named Pipe 서버를 열고
-    /// EXE가 보낸 "파일 열기" 요청을 받아 현재 NX 세션에서 파일을 엽니다.
+    /// 브리지 "배관" 코드. NX 작업 코드는 여기가 아니라 NxCommands.cs에 작성합니다.
+    ///
+    /// 하는 일
+    ///   1) NX 진입점 (Main / Startup / GetUnloadOption)
+    ///   2) Named Pipe 서버: EXE의 요청("명령이름\t인수")을 받음
+    ///   3) [NxCommand]가 붙은 함수를 찾아 NX 메인 스레드에서 Session과 함께 실행하고 결과를 돌려줌
     ///
     /// 로드 방법
     ///   1) 수동: NX에서 파일 → 실행 → NX Open(Ctrl+U) → NxOpenFile.NxBridge.dll 선택 (NX 실행당 1회)
@@ -25,13 +28,30 @@ namespace NxOpenFile.NxBridge
         private static readonly object NxSync = new object();
         private static Thread _serverThread;
 
+        /// <summary>
+        /// NX Open API는 NX 메인 스레드에서만 호출할 수 있습니다
+        /// ("function may only be called from the main thread").
+        /// Main/Startup(= NX 메인 스레드)에서 숨은 컨트롤을 만들어 두고,
+        /// 파이프 스레드는 이 컨트롤의 Invoke로 작업을 메인 스레드에 넘깁니다.
+        /// </summary>
+        private static System.Windows.Forms.Control _mainThreadInvoker;
+
+        /// <summary>명령 이름 → NxCommands의 함수</summary>
+        private static Dictionary<string, Func<Session, string, string>> _commands =
+            new Dictionary<string, Func<Session, string, string>>(StringComparer.OrdinalIgnoreCase);
+
+        // ------------------------------------------------------------------
+        // NX 진입점
+        // ------------------------------------------------------------------
+
         /// <summary>Ctrl+U(NX Open 실행)로 로드했을 때의 진입점.</summary>
         public static void Main(string[] args)
         {
             bool started = Start();
             string message = started
-                ? "NX 파일 열기 브리지가 시작되었습니다.\n이제 NxOpenFile.exe에서 파일을 열 수 있습니다.\n\n파이프: " + BridgeProtocol.PipeName
-                : "NX 파일 열기 브리지가 이미 실행 중입니다.\n\n파이프: " + BridgeProtocol.PipeName;
+                ? "NX 브리지가 시작되었습니다.\n이제 NxOpenFile.exe에서 NX를 사용할 수 있습니다.\n\n" +
+                  "등록된 명령: " + string.Join(", ", _commands.Keys) + "\n파이프: " + BridgeProtocol.PipeName
+                : "NX 브리지가 이미 실행 중입니다.\n\n파이프: " + BridgeProtocol.PipeName;
 
             try
             {
@@ -59,14 +79,6 @@ namespace NxOpenFile.NxBridge
             return (int)Session.LibraryUnloadOption.AtTermination;
         }
 
-        /// <summary>
-        /// NX Open API는 NX 메인 스레드에서만 호출할 수 있습니다
-        /// ("function may only be called from the main thread").
-        /// Main/Startup(= NX 메인 스레드)에서 숨은 컨트롤을 만들어 두고,
-        /// 파이프 스레드는 이 컨트롤의 Invoke로 작업을 메인 스레드에 넘깁니다.
-        /// </summary>
-        private static System.Windows.Forms.Control _mainThreadInvoker;
-
         private static bool Start()
         {
             lock (StartSync)
@@ -77,6 +89,8 @@ namespace NxOpenFile.NxBridge
                 _mainThreadInvoker = new System.Windows.Forms.Control();
                 IntPtr handle = _mainThreadInvoker.Handle; // 핸들을 지금(메인 스레드에서) 강제로 생성
                 Log("메인 스레드 Invoker 생성. 스레드 ID=" + Thread.CurrentThread.ManagedThreadId + ", 핸들=" + handle);
+
+                _commands = LoadCommands();
 
                 _serverThread = new Thread(ServerLoop)
                 {
@@ -90,32 +104,51 @@ namespace NxOpenFile.NxBridge
             }
         }
 
-        /// <summary>
-        /// 문제 진단용: 현재 NX에 로드된 NXOpen 어셈블리와 위치를 기록합니다.
-        /// 같은 이름이 두 번 나오거나 NX 설치 폴더(NXBIN\managed) 밖에서 로드됐다면
-        /// 빌드 출력 폴더에 NXOpen DLL이 복사된 것입니다.
-        /// (NXOpen 형식을 쓰지 않으므로 NXOpen 로드가 실패해도 동작함)
-        /// </summary>
-        private static void LogLoadedNxAssemblies()
-        {
-            try
-            {
-                Log("브리지 DLL 위치: " + typeof(BridgeEntry).Assembly.Location);
-                foreach (System.Reflection.Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    string name = assembly.GetName().Name;
-                    if (!name.StartsWith("NXOpen", StringComparison.OrdinalIgnoreCase)) continue;
+        // ------------------------------------------------------------------
+        // 명령 등록: 이 DLL 안의 [NxCommand] 함수를 모두 찾음
+        // ------------------------------------------------------------------
 
-                    string location;
-                    try { location = assembly.IsDynamic ? "(dynamic)" : assembly.Location; }
-                    catch (Exception) { location = "?"; }
-                    Log("  로드된 어셈블리: " + assembly.FullName + " @ " + location);
+        private static Dictionary<string, Func<Session, string, string>> LoadCommands()
+        {
+            Dictionary<string, Func<Session, string, string>> commands =
+                new Dictionary<string, Func<Session, string, string>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (Type type in typeof(BridgeEntry).Assembly.GetTypes())
+            {
+                foreach (MethodInfo method in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
+                {
+                    NxCommandAttribute attribute =
+                        (NxCommandAttribute)Attribute.GetCustomAttribute(method, typeof(NxCommandAttribute));
+                    if (attribute == null) continue;
+
+                    string name = string.IsNullOrEmpty(attribute.Name) ? method.Name : attribute.Name;
+                    string where = type.Name + "." + method.Name;
+
+                    if (name.IndexOfAny(new[] { BridgeProtocol.Separator, '\r', '\n' }) >= 0)
+                    {
+                        Log("명령 등록 실패 (이름에 탭/줄바꿈 불가): " + where);
+                        continue;
+                    }
+                    if (commands.ContainsKey(name))
+                    {
+                        Log("명령 등록 실패 (이름 중복 '" + name + "'): " + where);
+                        continue;
+                    }
+
+                    try
+                    {
+                        commands[name] = (Func<Session, string, string>)Delegate.CreateDelegate(
+                            typeof(Func<Session, string, string>), method);
+                        Log("명령 등록: " + name + " → " + where);
+                    }
+                    catch (ArgumentException)
+                    {
+                        Log("명령 등록 실패 (형식 불일치): " + where +
+                            "  필요한 형식: public static string 함수이름(Session session, string arg)");
+                    }
                 }
             }
-            catch (Exception ex)
-            {
-                Log("어셈블리 목록 기록 실패: " + ex.Message);
-            }
+            return commands;
         }
 
         // ------------------------------------------------------------------
@@ -188,9 +221,9 @@ namespace NxOpenFile.NxBridge
                 request = reader.ReadLine();
             }
 
-            Log("요청: " + request);
+            Log("요청: " + Shorten(request));
             string response = ProcessRequest(request);
-            Log("응답: " + (response.Length > 300 ? response.Substring(0, 300) + "... (" + response.Length + "자)" : response));
+            Log("응답: " + Shorten(response));
 
             byte[] bytes = BridgeProtocol.Encoding.GetBytes(response + "\n");
             pipe.Write(bytes, 0, bytes.Length);
@@ -202,175 +235,47 @@ namespace NxOpenFile.NxBridge
 
         private static string ProcessRequest(string request)
         {
-            try
-            {
-                return ProcessRequestCore(request);
-            }
-            catch (Exception ex)
-            {
-                Log("요청 처리 중 예외: " + ex);
-                return Error(ex.Message);
-            }
-        }
-
-        private static string ProcessRequestCore(string request)
-        {
             if (string.IsNullOrEmpty(request))
                 return Error("빈 요청입니다.");
 
             int tab = request.IndexOf(BridgeProtocol.Separator);
             string command = tab < 0 ? request : request.Substring(0, tab);
-            string argument = tab < 0 ? string.Empty : request.Substring(tab + 1);
+            string argument = tab < 0 ? string.Empty : BridgeProtocol.Unescape(request.Substring(tab + 1));
 
-            switch (command)
+            if (command == BridgeProtocol.CmdPing)
+                return Ok("NX 연결됨");
+
+            Func<Session, string, string> handler;
+            if (!_commands.TryGetValue(command, out handler))
+                return Error("등록되지 않은 명령: " + command +
+                             "  (NxCommands.cs에 [NxCommand(\"" + command + "\")] 함수가 있는지 확인하세요)");
+
+            try
             {
-                case BridgeProtocol.CmdPing:
-                    return Ok("NX 연결됨");
-                case BridgeProtocol.CmdOpen:
-                    lock (NxSync)
-                    {
-                        return RunOnMainThread(() => OpenPart(argument));
-                    }
-                case BridgeProtocol.CmdComponents:
-                    lock (NxSync)
-                    {
-                        return RunOnMainThread(GetComponents);
-                    }
-                default:
-                    return Error("알 수 없는 명령: " + command);
+                lock (NxSync)
+                {
+                    // NX 작업은 반드시 메인 스레드에서. Session도 메인 스레드에서 가져옴
+                    string result = RunOnMainThread(() => handler(Session.GetSession(), argument));
+                    return Ok(result);
+                }
+            }
+            catch (Exception ex)
+            {
+                // NxCommands 함수에서 던진 예외 → EXE에서는 BridgeException(메시지)으로 받음
+                Log("명령 실패: " + command + " / " + ex);
+                return Error(ex.Message);
             }
         }
-
-        // ------------------------------------------------------------------
-        // NX 파일 열기
-        // ------------------------------------------------------------------
 
         /// <summary>NX 메인 스레드에서 작업을 실행하고 끝날 때까지 기다립니다.</summary>
         private static string RunOnMainThread(Func<string> work)
         {
             System.Windows.Forms.Control invoker = _mainThreadInvoker;
             if (invoker == null || !invoker.IsHandleCreated)
-                return Error("NX 메인 스레드에 연결되지 않았습니다. NX를 재시작한 뒤 브리지 DLL을 다시 실행하세요.");
+                throw new InvalidOperationException("NX 메인 스레드에 연결되지 않았습니다. NX를 재시작한 뒤 브리지 DLL을 다시 실행하세요.");
 
             // NX가 다른 작업(대화상자 등) 중이면 끝날 때까지 기다렸다가 실행됨
             return (string)invoker.Invoke(work);
-        }
-
-        private static string OpenPart(string path)
-        {
-            if (string.IsNullOrWhiteSpace(path))
-                return Error("파일 경로가 비어 있습니다.");
-            if (!File.Exists(path))
-                return Error("파일을 찾을 수 없습니다: " + path);
-
-            Session theSession = Session.GetSession();
-            PartLoadStatus loadStatus = null;
-
-            try
-            {
-                // 이미 세션에 로드된 파일이면 다시 열지 않고 Display Part로 전환
-                BasePart loaded = FindLoadedPart(theSession, path);
-                if (loaded != null)
-                {
-                    theSession.Parts.SetActiveDisplay(
-                        loaded,
-                        DisplayPartOption.AllowAdditional,
-                        PartDisplayPartWorkPartOption.UseLast,
-                        out loadStatus);
-
-                    Log("이미 로드된 파일 표시: " + path);
-                    return Ok("이미 열려 있는 파일로 전환했습니다: " + loaded.Leaf + DescribeLoadStatus(loadStatus));
-                }
-
-                BasePart opened = theSession.Parts.OpenBaseDisplay(path, out loadStatus);
-                Log("파일 열기: " + path);
-                return Ok("열기 완료: " + opened.Leaf + DescribeLoadStatus(loadStatus));
-            }
-            catch (NXException ex)
-            {
-                Log("NX 오류: " + path + " / " + ex.Message);
-                return Error("NX 오류: " + ex.Message);
-            }
-            catch (Exception ex)
-            {
-                Log("오류: " + path + " / " + ex);
-                return Error(ex.Message);
-            }
-            finally
-            {
-                if (loadStatus != null) loadStatus.Dispose();
-            }
-        }
-
-        // ------------------------------------------------------------------
-        // 컴포넌트 목록 (NX 메인 스레드에서 실행)
-        // ------------------------------------------------------------------
-
-        private static string GetComponents()
-        {
-            Session theSession = Session.GetSession();
-            Part display = theSession.Parts.Display;
-            if (display == null)
-                return Error("NX에 열린 파트(디스플레이 파트)가 없습니다.");
-
-            List<ComponentRow> rows = new List<ComponentRow>();
-
-            // 0레벨: 현재 디스플레이 파트(어셈블리 최상위)
-            rows.Add(new ComponentRow(0, display.Leaf, SafeFullPath(display), false, true));
-
-            // 어셈블리가 아니면 RootComponent가 null
-            Component root = display.ComponentAssembly.RootComponent;
-            if (root != null)
-                AddChildren(root, 1, rows);
-
-            Log("컴포넌트 목록: " + display.Leaf + ", " + (rows.Count - 1) + "개");
-            return Ok(ComponentRow.Serialize(rows));
-        }
-
-        private static void AddChildren(Component parent, int level, List<ComponentRow> rows)
-        {
-            foreach (Component child in parent.GetChildren())
-            {
-                // 부분 로드/미로드 컴포넌트는 Prototype이 없을 수 있음
-                BasePart prototype = child.Prototype as BasePart;
-                bool loaded = prototype != null;
-
-                rows.Add(new ComponentRow(
-                    level,
-                    child.DisplayName,
-                    loaded ? SafeFullPath(prototype) : string.Empty,
-                    child.IsSuppressed,
-                    loaded));
-
-                AddChildren(child, level + 1, rows);
-            }
-        }
-
-        private static string SafeFullPath(BasePart part)
-        {
-            try { return part.FullPath; }
-            catch (NXException) { return string.Empty; }
-        }
-
-        private static BasePart FindLoadedPart(Session theSession, string path)
-        {
-            foreach (BasePart part in theSession.Parts)
-            {
-                string fullPath;
-                try { fullPath = part.FullPath; }
-                catch (NXException) { continue; }
-
-                if (string.Equals(fullPath, path, StringComparison.OrdinalIgnoreCase))
-                    return part;
-            }
-            return null;
-        }
-
-        private static string DescribeLoadStatus(PartLoadStatus status)
-        {
-            if (status == null) return string.Empty;
-            int unloaded = status.NumberUnloadedParts;
-            return unloaded > 0 ? " (로드되지 않은 하위 파트 " + unloaded + "개)" : string.Empty;
         }
 
         // ------------------------------------------------------------------
@@ -379,16 +284,49 @@ namespace NxOpenFile.NxBridge
 
         private static string Ok(string message)
         {
-            return BridgeProtocol.RespOk + BridgeProtocol.Separator + BridgeProtocol.ToSingleLine(message);
+            return BridgeProtocol.RespOk + BridgeProtocol.Separator + BridgeProtocol.Escape(message);
         }
 
         private static string Error(string message)
         {
-            return BridgeProtocol.RespError + BridgeProtocol.Separator + BridgeProtocol.ToSingleLine(message);
+            return BridgeProtocol.RespError + BridgeProtocol.Separator + BridgeProtocol.Escape(message);
         }
 
-        /// <summary>%TEMP%\NxOpenFile.NxBridge.log 에 기록 (문제 확인용)</summary>
-        private static void Log(string message)
+        private static string Shorten(string text)
+        {
+            if (text == null) return "(null)";
+            return text.Length > 300 ? text.Substring(0, 300) + "... (" + text.Length + "자)" : text;
+        }
+
+        /// <summary>
+        /// 문제 진단용: 현재 NX에 로드된 NXOpen 어셈블리와 위치를 기록합니다.
+        /// 같은 이름이 두 번 나오거나 NX 설치 폴더(NXBIN\managed) 밖에서 로드됐다면
+        /// 빌드 출력 폴더에 NXOpen DLL이 복사된 것입니다.
+        /// </summary>
+        private static void LogLoadedNxAssemblies()
+        {
+            try
+            {
+                Log("브리지 DLL 위치: " + typeof(BridgeEntry).Assembly.Location);
+                foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    string name = assembly.GetName().Name;
+                    if (!name.StartsWith("NXOpen", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    string location;
+                    try { location = assembly.IsDynamic ? "(dynamic)" : assembly.Location; }
+                    catch (Exception) { location = "?"; }
+                    Log("  로드된 어셈블리: " + assembly.FullName + " @ " + location);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("어셈블리 목록 기록 실패: " + ex.Message);
+            }
+        }
+
+        /// <summary>%TEMP%\NxOpenFile.NxBridge.log 에 기록. NxCommands에서도 사용할 수 있습니다.</summary>
+        internal static void Log(string message)
         {
             try
             {

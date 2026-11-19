@@ -62,18 +62,16 @@ namespace NxOpenFile.App
                 }
 
                 // 파이프 통신은 UI 스레드를 막지 않도록 백그라운드에서 실행
-                BridgeResult result = await Task.Run(() => NxBridgeClient.OpenFile(path));
-
-                if (result.Success)
-                {
-                    SetStatus(result.Message);
-                }
-                else
-                {
-                    SetStatus("열기 실패");
-                    MessageBox.Show(this, result.Message, "NX 파일 열기 실패",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
+                // → NX 안에서 NxCommands.OpenPart(session, path) 실행
+                string message = await Task.Run(() => NxBridgeClient.Call(NxCommandNames.OpenPart, path));
+                SetStatus(message);
+            }
+            catch (BridgeException ex)
+            {
+                // NxCommands.OpenPart에서 던진 예외 메시지
+                SetStatus("열기 실패");
+                MessageBox.Show(this, ex.Message, "NX 파일 열기 실패",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             catch (TimeoutException)
             {
@@ -108,6 +106,7 @@ namespace NxOpenFile.App
                     return;
                 }
 
+                // → NX 안에서 NxCommands.GetComponents(session, "") 실행
                 List<ComponentRow> rows = await Task.Run(() => NxBridgeClient.GetComponents());
                 ShowComponents(rows);
 

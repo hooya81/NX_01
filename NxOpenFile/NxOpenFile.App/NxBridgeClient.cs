@@ -6,8 +6,8 @@ using System.Threading;
 
 namespace NxOpenFile.App
 {
-    /// <summary>NX 브리지 DLL의 응답</summary>
-    public sealed class BridgeResult
+    /// <summary>NX 브리지 DLL의 응답 (내부용)</summary>
+    internal sealed class BridgeResult
     {
         public BridgeResult(bool success, string message)
         {
@@ -31,22 +31,32 @@ namespace NxOpenFile.App
         /// <summary>NX(브리지 DLL)에 연결할 때 기다리는 최대 시간</summary>
         public const int ConnectTimeoutMs = 3000;
 
-        /// <summary>NX에 파일 열기를 요청합니다. 연결 실패 시 TimeoutException이 발생합니다.</summary>
-        public static BridgeResult OpenFile(string path)
+        /// <summary>
+        /// NX 안의 [NxCommand("command")] 함수를 실행하고 그 반환 문자열을 받습니다.
+        /// 함수는 NX 메인 스레드에서 현재 Session과 함께 실행됩니다 (NxCommands.cs 참고).
+        /// </summary>
+        /// <param name="command">NxCommands.cs의 [NxCommand] 이름 (예: NxCommandNames.GetComponents)</param>
+        /// <param name="argument">함수의 arg로 전달할 문자열 (여러 줄 가능)</param>
+        /// <exception cref="BridgeException">NX 함수가 예외를 던졌거나 명령이 등록되지 않은 경우</exception>
+        /// <exception cref="TimeoutException">NX(브리지 DLL)에 연결하지 못한 경우</exception>
+        public static string Call(string command, string argument = "")
         {
-            return Send(BridgeProtocol.CmdOpen + BridgeProtocol.Separator + path);
+            if (string.IsNullOrEmpty(command) || command.IndexOfAny(new[] { BridgeProtocol.Separator, '\r', '\n' }) >= 0)
+                throw new ArgumentException("명령 이름이 비어 있거나 탭/줄바꿈이 들어 있습니다.", "command");
+
+            BridgeResult result = Send(command + BridgeProtocol.Separator + BridgeProtocol.Escape(argument));
+            if (!result.Success)
+                throw new BridgeException(result.Message);
+            return result.Message;
         }
 
         /// <summary>
-        /// 현재 NX 디스플레이 파트의 컴포넌트 목록을 가져옵니다.
+        /// 현재 NX 디스플레이 파트의 컴포넌트 목록 (Call + ComponentRow.Parse 예시).
         /// 첫 행(Level 0)은 디스플레이 파트 자신입니다.
         /// </summary>
         public static List<ComponentRow> GetComponents()
         {
-            BridgeResult result = Send(BridgeProtocol.CmdComponents);
-            if (!result.Success)
-                throw new BridgeException(result.Message);
-            return ComponentRow.Parse(result.Message);
+            return ComponentRow.Parse(Call(NxCommandNames.GetComponents));
         }
 
         /// <summary>브리지 DLL이 로드되어 있고 응답하는지 확인합니다.</summary>
@@ -124,7 +134,7 @@ namespace NxOpenFile.App
 
                 int tab = response.IndexOf(BridgeProtocol.Separator);
                 string status = tab < 0 ? response : response.Substring(0, tab);
-                string message = tab < 0 ? string.Empty : response.Substring(tab + 1);
+                string message = tab < 0 ? string.Empty : BridgeProtocol.Unescape(response.Substring(tab + 1));
                 return new BridgeResult(status == BridgeProtocol.RespOk, message);
             }
         }

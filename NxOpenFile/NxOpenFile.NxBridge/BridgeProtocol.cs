@@ -7,19 +7,29 @@ using System.Text;
 namespace NxOpenFile
 {
     /// <summary>
+    /// NxCommands.cs의 [NxCommand] 이름 모음. EXE와 브리지가 같은 이름을 쓰도록 공유합니다.
+    /// (새 명령을 만들 때 여기에 추가하는 것은 선택 사항. 문자열을 직접 써도 됩니다.)
+    /// </summary>
+    public static class NxCommandNames
+    {
+        /// <summary>arg = 파일 전체 경로, 반환 = 결과 메시지</summary>
+        public const string OpenPart = "OpenPart";
+        /// <summary>arg 없음, 반환 = ComponentRow.Serialize 결과</summary>
+        public const string GetComponents = "GetComponents";
+    }
+
+    /// <summary>
     /// EXE(클라이언트)와 NX 안의 브리지 DLL(서버)이 공유하는 통신 규약.
     /// 이 파일은 NxOpenFile.App 프로젝트에 "링크"로 포함되므로 NXOpen을 참조하면 안 됩니다.
     ///
     /// 요청 1회 = 파이프 연결 1회, 한 줄 요청 / 한 줄 응답 (UTF-8, BOM 없음)
-    ///   요청: "PING"            응답: "OK\t&lt;메시지&gt;"
-    ///   요청: "OPEN\t&lt;경로&gt;"     응답: "OK\t&lt;메시지&gt;" 또는 "ERR\t&lt;오류 메시지&gt;"
+    ///   요청: "&lt;명령이름&gt;\t&lt;인수&gt;"   응답: "OK\t&lt;결과&gt;" 또는 "ERR\t&lt;오류 메시지&gt;"
+    ///   인수와 결과는 Escape되어 있어 여러 줄 문자열도 주고받을 수 있습니다.
+    ///   "PING"은 브리지 자체가 응답하는 연결 확인용 명령입니다.
     /// </summary>
     public static class BridgeProtocol
     {
         public const string CmdPing = "PING";
-        public const string CmdOpen = "OPEN";
-        /// <summary>현재 디스플레이 파트의 컴포넌트 목록. 응답: "OK\t&lt;ComponentRow 직렬화&gt;"</summary>
-        public const string CmdComponents = "COMPONENTS";
 
         /// <summary>목록 응답에서 행 구분 (ASCII Record Separator)</summary>
         public const char RecordSeparator = '\u001E';
@@ -42,6 +52,36 @@ namespace NxOpenFile
                 int sessionId = Process.GetCurrentProcess().SessionId;
                 return "NxOpenFile_" + sessionId + "_" + Environment.UserName;
             }
+        }
+
+        /// <summary>
+        /// 줄바꿈을 \n, \r 문자로 바꿔 한 줄로 만듭니다 (역슬래시는 \\).
+        /// 요청 인수와 응답 결과에 사용하며, 받는 쪽에서 Unescape로 원래대로 되돌립니다.
+        /// </summary>
+        public static string Escape(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+            return text.Replace("\\", "\\\\").Replace("\r", "\\r").Replace("\n", "\\n");
+        }
+
+        public static string Unescape(string text)
+        {
+            if (string.IsNullOrEmpty(text) || text.IndexOf('\\') < 0) return text ?? string.Empty;
+
+            StringBuilder sb = new StringBuilder(text.Length);
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (c == '\\' && i + 1 < text.Length)
+                {
+                    char next = text[i + 1];
+                    if (next == 'n') { sb.Append('\n'); i++; continue; }
+                    if (next == 'r') { sb.Append('\r'); i++; continue; }
+                    if (next == '\\') { sb.Append('\\'); i++; continue; }
+                }
+                sb.Append(c);
+            }
+            return sb.ToString();
         }
 
         /// <summary>응답/요청 한 줄 안에 탭·줄바꿈이 섞이지 않도록 정리합니다.</summary>
