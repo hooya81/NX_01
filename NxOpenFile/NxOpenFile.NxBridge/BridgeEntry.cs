@@ -82,19 +82,35 @@ namespace NxOpenFile.NxBridge
         {
             while (true)
             {
+                NamedPipeServerStream pipe;
                 try
                 {
-                    using (NamedPipeServerStream pipe = CreatePipe())
+                    pipe = CreatePipe();
+                }
+                catch (Exception ex)
+                {
+                    // 같은 이름의 파이프를 다른 NX가 이미 열어 둔 경우 등
+                    Log("파이프 생성 실패: " + ex.Message);
+                    Thread.Sleep(2000);
+                    continue;
+                }
+
+                using (pipe)
+                {
+                    try
                     {
                         pipe.WaitForConnection();
                         HandleClient(pipe);
                     }
-                }
-                catch (Exception ex)
-                {
-                    // 같은 이름의 파이프를 다른 NX가 이미 열었거나 클라이언트가 중간에 끊긴 경우 등
-                    Log("파이프 오류: " + ex.Message);
-                    Thread.Sleep(2000);
+                    catch (IOException ex)
+                    {
+                        // 클라이언트가 중간에 끊은 경우: 바로 다음 연결을 받음
+                        Log("클라이언트 연결 끊김: " + ex.Message);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log("요청 처리 오류: " + ex);
+                    }
                 }
             }
         }
@@ -121,21 +137,39 @@ namespace NxOpenFile.NxBridge
 
         private static void HandleClient(NamedPipeServerStream pipe)
         {
+            // StreamWriter는 Dispose 시 끊긴 파이프에 Flush하다 예외가 나므로 바이트로 직접 씀
+            string request;
             using (StreamReader reader = new StreamReader(pipe, BridgeProtocol.Encoding, false, 4096, true))
-            using (StreamWriter writer = new StreamWriter(pipe, BridgeProtocol.Encoding, 4096, true))
             {
-                writer.AutoFlush = true;
-
-                string request = reader.ReadLine();
-                string response = ProcessRequest(request);
-                writer.WriteLine(response);
-
-                try { pipe.WaitForPipeDrain(); }
-                catch (IOException) { /* 클라이언트가 먼저 끊은 경우 무시 */ }
+                request = reader.ReadLine();
             }
+
+            Log("요청: " + request);
+            string response = ProcessRequest(request);
+            Log("응답: " + response);
+
+            byte[] bytes = BridgeProtocol.Encoding.GetBytes(response + "\n");
+            pipe.Write(bytes, 0, bytes.Length);
+            pipe.Flush();
+
+            try { pipe.WaitForPipeDrain(); }
+            catch (IOException) { /* 클라이언트가 응답을 읽고 먼저 끊은 경우 무시 */ }
         }
 
         private static string ProcessRequest(string request)
+        {
+            try
+            {
+                return ProcessRequestCore(request);
+            }
+            catch (Exception ex)
+            {
+                Log("요청 처리 중 예외: " + ex);
+                return Error(ex.Message);
+            }
+        }
+
+        private static string ProcessRequestCore(string request)
         {
             if (string.IsNullOrEmpty(request))
                 return Error("빈 요청입니다.");

@@ -86,22 +86,27 @@ namespace NxOpenFile.App
                 // 브리지 DLL이 로드되지 않았으면 TimeoutException
                 pipe.Connect(ConnectTimeoutMs);
 
-                using (StreamWriter writer = new StreamWriter(pipe, BridgeProtocol.Encoding, 4096, true))
+                // StreamWriter는 Dispose 시 끊긴 파이프에 Flush하다 "파이프가 끊어졌습니다" 예외가 나므로
+                // 요청은 바이트로 직접 씀
+                byte[] bytes = BridgeProtocol.Encoding.GetBytes(request + "\n");
+                pipe.Write(bytes, 0, bytes.Length);
+                pipe.Flush();
+
+                // 큰 어셈블리는 여는 데 오래 걸릴 수 있으므로 응답은 시간 제한 없이 대기
+                string response;
                 using (StreamReader reader = new StreamReader(pipe, BridgeProtocol.Encoding, false, 4096, true))
                 {
-                    writer.AutoFlush = true;
-                    writer.WriteLine(request);
-
-                    // 큰 어셈블리는 여는 데 오래 걸릴 수 있으므로 응답은 시간 제한 없이 대기
-                    string response = reader.ReadLine();
-                    if (response == null)
-                        return new BridgeResult(false, "NX로부터 응답이 없습니다.");
-
-                    int tab = response.IndexOf(BridgeProtocol.Separator);
-                    string status = tab < 0 ? response : response.Substring(0, tab);
-                    string message = tab < 0 ? string.Empty : response.Substring(tab + 1);
-                    return new BridgeResult(status == BridgeProtocol.RespOk, message);
+                    response = reader.ReadLine();
                 }
+
+                if (response == null)
+                    return new BridgeResult(false,
+                        "NX가 응답 없이 연결을 끊었습니다.\n%TEMP%\\NxOpenFile.NxBridge.log 파일을 확인하세요.");
+
+                int tab = response.IndexOf(BridgeProtocol.Separator);
+                string status = tab < 0 ? response : response.Substring(0, tab);
+                string message = tab < 0 ? string.Empty : response.Substring(tab + 1);
+                return new BridgeResult(status == BridgeProtocol.RespOk, message);
             }
         }
     }
