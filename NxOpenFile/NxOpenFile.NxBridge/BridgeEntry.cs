@@ -57,11 +57,24 @@ namespace NxOpenFile.NxBridge
             return (int)Session.LibraryUnloadOption.AtTermination;
         }
 
+        /// <summary>
+        /// NX Open API는 NX 메인 스레드에서만 호출할 수 있습니다
+        /// ("function may only be called from the main thread").
+        /// Main/Startup(= NX 메인 스레드)에서 숨은 컨트롤을 만들어 두고,
+        /// 파이프 스레드는 이 컨트롤의 Invoke로 작업을 메인 스레드에 넘깁니다.
+        /// </summary>
+        private static System.Windows.Forms.Control _mainThreadInvoker;
+
         private static bool Start()
         {
             lock (StartSync)
             {
                 if (_serverThread != null) return false;
+
+                // 반드시 NX 메인 스레드(Main/Startup 호출 스레드)에서 생성해야 함
+                _mainThreadInvoker = new System.Windows.Forms.Control();
+                IntPtr handle = _mainThreadInvoker.Handle; // 핸들을 지금(메인 스레드에서) 강제로 생성
+                Log("메인 스레드 Invoker 생성. 스레드 ID=" + Thread.CurrentThread.ManagedThreadId + ", 핸들=" + handle);
 
                 _serverThread = new Thread(ServerLoop)
                 {
@@ -214,7 +227,7 @@ namespace NxOpenFile.NxBridge
                 case BridgeProtocol.CmdOpen:
                     lock (NxSync)
                     {
-                        return OpenPart(argument);
+                        return RunOnMainThread(() => OpenPart(argument));
                     }
                 default:
                     return Error("알 수 없는 명령: " + command);
@@ -224,6 +237,17 @@ namespace NxOpenFile.NxBridge
         // ------------------------------------------------------------------
         // NX 파일 열기
         // ------------------------------------------------------------------
+
+        /// <summary>NX 메인 스레드에서 작업을 실행하고 끝날 때까지 기다립니다.</summary>
+        private static string RunOnMainThread(Func<string> work)
+        {
+            System.Windows.Forms.Control invoker = _mainThreadInvoker;
+            if (invoker == null || !invoker.IsHandleCreated)
+                return Error("NX 메인 스레드에 연결되지 않았습니다. NX를 재시작한 뒤 브리지 DLL을 다시 실행하세요.");
+
+            // NX가 다른 작업(대화상자 등) 중이면 끝날 때까지 기다렸다가 실행됨
+            return (string)invoker.Invoke(work);
+        }
 
         private static string OpenPart(string path)
         {

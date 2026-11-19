@@ -23,6 +23,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- NX 메인 스레드로 작업을 넘기는 데 Control.Invoke 사용 -->
+    <Reference Include="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- NX 런타임이 제공하므로 출력 폴더로 복사하지 않음 (Private=false) -->
     <Reference Include="NXOpen">
       <HintPath>$(NxManagedDir)\NXOpen.dll</HintPath>
