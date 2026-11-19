@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- VS2019 (16.x) 호환: SDK 스타일 + .NET Framework 4.8 DLL -->
+    <!-- NX 내부 실행용 (파일 -> 실행 -> NX Open). OutputType=Library 필수. -->
+    <OutputType>Library</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>NX_FileOpenClose</RootNamespace>
+    <AssemblyName>NX_FileOpenClose</AssemblyName>
+    <UseWindowsForms>true</UseWindowsForms>
+    <MyType>Windows</MyType>
+    <!-- NX는 반드시 64bit -->
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>16.9</LangVersion>
+    <OptionExplicit>On</OptionExplicit>
+    <OptionStrict>On</OptionStrict>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutputPath>bin\x64\Debug\</OutputPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutputPath>bin\x64\Release\</OutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      NX2606 설치 경로에 맞게 동작하도록 UGII_BASE_DIR 환경변수 사용.
+      예) C:\Program Files\Siemens\NX2606 -> $(UGII_BASE_DIR)\NXBIN\managed\NXOpen.dll
+      환경변수가 없으면 아래 HintPath를 절대경로로 직접 수정하세요.
+    -->
+    <Reference Include="NXOpen">
+      <HintPath>$(UGII_BASE_DIR)\NXBIN\managed\NXOpen.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="NXOpen.UF">
+      <HintPath>C:\Program Files\Siemens\NX2206\NXBIN\managed\NXOpen.UF.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="NXOpen.Utilities">
+      <HintPath>$(UGII_BASE_DIR)\NXBIN\managed\NXOpen.Utilities.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="NXOpenUI">
+      <HintPath>$(UGII_BASE_DIR)\NXBIN\managed\NXOpenUI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- NX2206에서 테스트 시: UGII_BASE_DIR=C:\Program Files\Siemens\NX2206 -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="My Project\" />
+  </ItemGroup>
+
+</Project>

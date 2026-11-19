@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    사용자가 실행하는 WinForms EXE.
+    NXOpen을 참조하지 않고, NX 안의 브리지 DLL과 Named Pipe로만 통신합니다.
+    NX가 설치된 PC라면 추가 런타임 설치 없이 실행되도록 .NET Framework 4.8 사용.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>NxOpenFile.App</RootNamespace>
+    <AssemblyName>NxOpenFile</AssemblyName>
+    <LangVersion>7.3</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 통신 규약(파이프 이름, 명령)은 브리지 DLL과 같은 소스를 공유 -->
+    <Compile Include="..\NxOpenFile.NxBridge\BridgeProtocol.cs" Link="BridgeProtocol.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>
