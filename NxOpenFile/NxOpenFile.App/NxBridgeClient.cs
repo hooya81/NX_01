@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
 using System.Threading;
@@ -18,6 +19,12 @@ namespace NxOpenFile.App
         public string Message { get; private set; }
     }
 
+    /// <summary>NX(브리지)가 요청을 처리하지 못하고 오류를 돌려준 경우</summary>
+    public sealed class BridgeException : Exception
+    {
+        public BridgeException(string message) : base(message) { }
+    }
+
     /// <summary>실행 중인 NX 안의 브리지 DLL(Named Pipe 서버)에 요청을 보냅니다.</summary>
     public static class NxBridgeClient
     {
@@ -28,6 +35,18 @@ namespace NxOpenFile.App
         public static BridgeResult OpenFile(string path)
         {
             return Send(BridgeProtocol.CmdOpen + BridgeProtocol.Separator + path);
+        }
+
+        /// <summary>
+        /// 현재 NX 디스플레이 파트의 컴포넌트 목록을 가져옵니다.
+        /// 첫 행(Level 0)은 디스플레이 파트 자신입니다.
+        /// </summary>
+        public static List<ComponentRow> GetComponents()
+        {
+            BridgeResult result = Send(BridgeProtocol.CmdComponents);
+            if (!result.Success)
+                throw new BridgeException(result.Message);
+            return ComponentRow.Parse(result.Message);
         }
 
         /// <summary>브리지 DLL이 로드되어 있고 응답하는지 확인합니다.</summary>

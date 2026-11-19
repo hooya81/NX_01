@@ -1,10 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Threading;
 using NXOpen;
+using NXOpen.Assemblies;
 
 namespace NxOpenFile.NxBridge
 {
@@ -188,7 +190,7 @@ namespace NxOpenFile.NxBridge
 
             Log("요청: " + request);
             string response = ProcessRequest(request);
-            Log("응답: " + response);
+            Log("응답: " + (response.Length > 300 ? response.Substring(0, 300) + "... (" + response.Length + "자)" : response));
 
             byte[] bytes = BridgeProtocol.Encoding.GetBytes(response + "\n");
             pipe.Write(bytes, 0, bytes.Length);
@@ -228,6 +230,11 @@ namespace NxOpenFile.NxBridge
                     lock (NxSync)
                     {
                         return RunOnMainThread(() => OpenPart(argument));
+                    }
+                case BridgeProtocol.CmdComponents:
+                    lock (NxSync)
+                    {
+                        return RunOnMainThread(GetComponents);
                     }
                 default:
                     return Error("알 수 없는 명령: " + command);
@@ -293,6 +300,56 @@ namespace NxOpenFile.NxBridge
             {
                 if (loadStatus != null) loadStatus.Dispose();
             }
+        }
+
+        // ------------------------------------------------------------------
+        // 컴포넌트 목록 (NX 메인 스레드에서 실행)
+        // ------------------------------------------------------------------
+
+        private static string GetComponents()
+        {
+            Session theSession = Session.GetSession();
+            Part display = theSession.Parts.Display;
+            if (display == null)
+                return Error("NX에 열린 파트(디스플레이 파트)가 없습니다.");
+
+            List<ComponentRow> rows = new List<ComponentRow>();
+
+            // 0레벨: 현재 디스플레이 파트(어셈블리 최상위)
+            rows.Add(new ComponentRow(0, display.Leaf, SafeFullPath(display), false, true));
+
+            // 어셈블리가 아니면 RootComponent가 null
+            Component root = display.ComponentAssembly.RootComponent;
+            if (root != null)
+                AddChildren(root, 1, rows);
+
+            Log("컴포넌트 목록: " + display.Leaf + ", " + (rows.Count - 1) + "개");
+            return Ok(ComponentRow.Serialize(rows));
+        }
+
+        private static void AddChildren(Component parent, int level, List<ComponentRow> rows)
+        {
+            foreach (Component child in parent.GetChildren())
+            {
+                // 부분 로드/미로드 컴포넌트는 Prototype이 없을 수 있음
+                BasePart prototype = child.Prototype as BasePart;
+                bool loaded = prototype != null;
+
+                rows.Add(new ComponentRow(
+                    level,
+                    child.DisplayName,
+                    loaded ? SafeFullPath(prototype) : string.Empty,
+                    child.IsSuppressed,
+                    loaded));
+
+                AddChildren(child, level + 1, rows);
+            }
+        }
+
+        private static string SafeFullPath(BasePart part)
+        {
+            try { return part.FullPath; }
+            catch (NXException) { return string.Empty; }
         }
 
         private static BasePart FindLoadedPart(Session theSession, string path)

@@ -24,10 +24,10 @@ NxOpenFile.exe (WinForms)                     실행 중인 NX
 | 경로 | 설명 |
 |---|---|
 | `NxOpenFile.sln` | 솔루션 (플랫폼 `x64`) |
-| `NxOpenFile.App/MainForm.cs` | 버튼, 파일 선택, NX에 열기 요청 |
+| `NxOpenFile.App/MainForm.cs` | 버튼 2개(파일 열기, 컴포넌트 목록), 목록 표시 |
 | `NxOpenFile.App/NxBridgeClient.cs` | Named Pipe 클라이언트 |
-| `NxOpenFile.NxBridge/BridgeEntry.cs` | NX 진입점 `Main` / `Startup` / `GetUnloadOption`, 파이프 서버, 파일 열기 |
-| `NxOpenFile.NxBridge/BridgeProtocol.cs` | 파이프 이름과 명령 규약 (EXE 프로젝트에 링크로 공유) |
+| `NxOpenFile.NxBridge/BridgeEntry.cs` | NX 진입점 `Main` / `Startup` / `GetUnloadOption`, 파이프 서버, 파일 열기, 컴포넌트 조회 |
+| `NxOpenFile.NxBridge/BridgeProtocol.cs` | 파이프 이름, 명령 규약, `ComponentRow` (EXE 프로젝트에 링크로 공유) |
 
 두 프로젝트 모두 `net48` / `x64`입니다. NX Open .NET이 .NET Framework 기반이고, NX가 설치된 PC라면 EXE를 추가 런타임 설치 없이 실행할 수 있습니다.
 
@@ -50,6 +50,16 @@ NxOpenFile.exe (WinForms)                     실행 중인 NX
 3. `NxOpenFile.exe`를 실행하고 **[NX에서 파일 열기...]** 버튼을 누른 뒤 `.prt` 파일을 선택합니다.
 4. 실행 중인 NX에 해당 파일이 열립니다.
    - 이미 열려 있는 파일이면 다시 열지 않고 그 파일로 화면을 전환합니다.
+5. **[컴포넌트 목록]** 버튼을 누르면 NX의 현재 디스플레이 파트 아래에 있는 컴포넌트가 모두 표시됩니다.
+   - 레벨만큼 들여쓴 트리 형태로 보여 줍니다. 열은 컴포넌트, 레벨, 파트 파일, 상태입니다.
+   - 첫 줄(굵은 글씨)은 디스플레이 파트 자신입니다.
+   - 억제된 컴포넌트와 로드되지 않은 컴포넌트는 회색으로 표시됩니다.
+
+### NX 메인 스레드
+
+NX Open API는 NX 메인 스레드에서만 호출할 수 있습니다.
+브리지는 요청을 별도 스레드에서 받은 뒤, 실제 NX 작업(파일 열기, 컴포넌트 조회)은 `Control.Invoke`로 메인 스레드에 넘겨 실행합니다.
+새 명령을 추가할 때도 `RunOnMainThread(...)`로 감싸야 합니다.
 
 ### NX 시작 시 자동 로드 (선택)
 
