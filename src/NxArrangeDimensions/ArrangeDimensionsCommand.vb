@@ -140,6 +140,9 @@ Friend NotInheritable Class ArrangeDimensionsCommand
 
     ' ---------------------------------------------------------------- 적용
 
+    ''' <summary>True면 치수별 계산/이동 내역을 정보 창(Listing Window)에 출력 (문제 확인용)</summary>
+    Private Const DebugLog As Boolean = True
+
     Private Sub Apply(refDim As Dimension, targets As List(Of Dimension), axis As StackAxis, settings As ArrangeSettings)
         Dim refCoord As Double = Coord(refDim.AnnotationOrigin, axis)
 
@@ -152,22 +155,47 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         Dim newOffsets As IDictionary(Of Integer, Double) =
             DimensionLayout.Compute(items, settings.Mode, settings.Spacing, settings.Order, settings.RowTolerance)
 
+        Dim log As ListingWindow = Nothing
+        If DebugLog Then
+            log = _session.ListingWindow
+            log.Open()
+            log.WriteLine("=== " & Title & " ===")
+            log.WriteLine("형태=" & settings.Mode.ToString() & ", 간격=" & settings.Spacing &
+                          ", 순서=" & settings.Order.ToString() & ", 축=" & axis.ToString())
+            log.WriteLine("기준치수 Tag=" & CULng(refDim.Tag) & ", 기준좌표=" & refCoord)
+            log.WriteLine("대상 " & targets.Count & "개 / 계산결과 " & newOffsets.Count & "개")
+        End If
+
         Dim mark As Session.UndoMarkId = _session.SetUndoMark(Session.MarkVisibility.Visible, Title)
 
         Dim moved As Integer = 0
         For i = 0 To targets.Count - 1
-            Dim newOffset As Double
-            If Not newOffsets.TryGetValue(i, newOffset) Then Continue For
-
             Dim d As Dimension = targets(i)
             Dim o As Point3d = d.AnnotationOrigin
+            Dim prefix As String = "[" & i & "] Tag=" & CULng(d.Tag) & " 현재=" & Coord(o, axis) &
+                                   " 오프셋=" & items(i).Offset & " 크기=" & items(i).Size
+
+            Dim newOffset As Double
+            If Not newOffsets.TryGetValue(i, newOffset) Then
+                ' 정상이라면 발생하지 않음. 발생 시 로그로 원인 확인
+                If log IsNot Nothing Then log.WriteLine(prefix & " -> 계산결과 없음 (건너뜀)")
+                Continue For
+            End If
+
             Dim n As Point3d = WithCoord(o, axis, refCoord + newOffset)
 
-            If Math.Abs(Coord(n, axis) - Coord(o, axis)) < 0.000000001 Then Continue For
+            If Math.Abs(Coord(n, axis) - Coord(o, axis)) < 0.000000001 Then
+                If log IsNot Nothing Then log.WriteLine(prefix & " -> 이미 위치에 있음 (" & Coord(n, axis) & ")")
+                Continue For
+            End If
 
             ' 치수선(텍스트) 위치만 쌓는 축 방향으로 이동. 다른 축 좌표는 유지.
             d.AnnotationOrigin = n
             moved += 1
+
+            If log IsNot Nothing Then
+                log.WriteLine(prefix & " -> 이동 " & Coord(n, axis) & " (설정 후 읽은 값=" & Coord(d.AnnotationOrigin, axis) & ")")
+            End If
         Next
 
         If moved = 0 Then

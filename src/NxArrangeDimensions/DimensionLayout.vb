@@ -60,7 +60,9 @@ Public Module DimensionLayout
         If spacing <= 0 Then Throw New ArgumentOutOfRangeException(NameOf(spacing), "간격은 0보다 커야 합니다.")
         If rowTolerance < 0 Then Throw New ArgumentOutOfRangeException(NameOf(rowTolerance))
 
-        Dim list = items.ToList()
+        ' 위치 값이 NaN/무한대인 항목은 비교식에서 모두 빠져 결과가 누락되므로 0(기준 줄)으로 취급
+        Dim list = items.Select(Function(i) If(Double.IsNaN(i.Offset) OrElse Double.IsInfinity(i.Offset),
+                                               New LayoutItem(i.Id, 0.0, i.Size), i)).ToList()
         Dim result As New Dictionary(Of Integer, Double)()
 
         If mode = ArrangeMode.Serial Then
