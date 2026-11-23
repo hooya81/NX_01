@@ -1,8 +1,8 @@
 # NX Arrange Dimensions
 
-Solid Edge의 *Arrange Dimensions*와 비슷하게, NX 도면 치수를 **기준치수에서 일정 간격으로 정렬**하는 NX Open(C#) 도구입니다.
+Solid Edge의 *Arrange Dimensions*와 비슷하게, NX 도면 치수를 **기준치수에서 일정 간격으로 정렬**하는 NX Open(VB.NET) 도구입니다.
 
-- 대상: NX 2606, C# / .NET Framework 4.8 (x64)
+- 대상: NX 2606, VB.NET / .NET Framework 4.8 (x64)
 - 1차 버전 지원 치수: 수평(Horizontal), 수직(Vertical)
 
 ## 사용 흐름
@@ -34,6 +34,9 @@ cd src\NxArrangeDimensions
 dotnet build -c Release
 ```
 
+- 프로젝트 옵션은 `Option Strict On`, `Option Explicit On`, `Option Infer On`입니다.
+- 네임스페이스는 프로젝트의 RootNamespace(`NxArrangeDimensions`)를 그대로 씁니다.
+
 - NX DLL은 `%UGII_BASE_DIR%\NXBIN\managed`에서 참조합니다. 경로가 다르면 `/p:NxManagedDir=C:\...\NXBIN\managed` 옵션으로 지정하세요.
 - 빌드 결과는 `bin\Release\NxArrangeDimensions.dll`에 생성됩니다.
 - 서명하지 않은 DLL을 실행하려면 NX Open 개발자 라이선스(`dotnet_author`)가 필요합니다. 일반 사용자에게 배포하려면 DLL에 서명해야 합니다.
@@ -42,11 +45,11 @@ dotnet build -c Release
 
 | 파일 | 역할 |
 |---|---|
-| `Program.cs` | NX 진입점(`Main`, `GetUnloadOption`) |
-| `ArrangeDimensionsCommand.cs` | 선택, NX 치수 읽기와 이동, Undo 처리 |
-| `DimensionLayout.cs` | 배치 계산. NX와 무관하므로 단독으로 테스트할 수 있습니다 |
-| `SettingsForm.cs` | 간격과 정렬 순서 입력 대화상자(WinForms) |
-| `ArrangeSettings.cs` | 입력값 저장과 불러오기 |
+| `Program.vb` | NX 진입점(`Main`, `GetUnloadOption`) |
+| `ArrangeDimensionsCommand.vb` | 선택, NX 치수 읽기와 이동, Undo 처리 |
+| `DimensionLayout.vb` | 배치 계산. NX와 무관하므로 단독으로 테스트할 수 있습니다 |
+| `SettingsForm.vb` | 간격과 정렬 순서 입력 대화상자(WinForms) |
+| `ArrangeSettings.vb` | 입력값 저장과 불러오기 |
 
 ## NX에서 꼭 확인할 점
 
