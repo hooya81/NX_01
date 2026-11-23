@@ -8,7 +8,8 @@ namespace NxArrangeDimensions
     public sealed class ArrangeSettings
     {
         public double Spacing { get; set; } = 10.0;
-        public ArrangeOrder Order { get; set; } = ArrangeOrder.KeepCurrent;
+        public ArrangeMode Mode { get; set; } = ArrangeMode.Parallel;
+        public ArrangeOrder Order { get; set; } = ArrangeOrder.BySizeAscending;
 
         /// <summary>같은 줄로 간주하는 허용 거리 = Spacing × 이 비율</summary>
         public const double RowToleranceRatio = 0.25;
@@ -39,6 +40,8 @@ namespace NxArrangeDimensions
                         s.Spacing = d;
                     else if (key == "Order" && int.TryParse(val, out n) && Enum.IsDefined(typeof(ArrangeOrder), n))
                         s.Order = (ArrangeOrder)n;
+                    else if (key == "Mode" && int.TryParse(val, out n) && Enum.IsDefined(typeof(ArrangeMode), n))
+                        s.Mode = (ArrangeMode)n;
                 }
             }
             catch
@@ -56,6 +59,7 @@ namespace NxArrangeDimensions
                 File.WriteAllLines(FilePath, new[]
                 {
                     "Spacing=" + Spacing.ToString(CultureInfo.InvariantCulture),
+                    "Mode=" + ((int)Mode).ToString(CultureInfo.InvariantCulture),
                     "Order=" + ((int)Order).ToString(CultureInfo.InvariantCulture),
                 });
             }

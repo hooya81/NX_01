@@ -16,7 +16,7 @@ namespace NxArrangeDimensions
     }
 
     /// <summary>
-    /// 기준치수 선택 → 정렬할 치수 선택 → 간격 입력 → 기준치수에서 일정 간격으로 배치.
+    /// 기준치수 선택 → 정렬할 치수 선택 → 형태(직렬/병렬/혼합)·간격 입력 → 기준치수 기준으로 배치.
     /// 1차 버전 지원 범위: 수평(HorizontalDimension) / 수직(VerticalDimension) 치수.
     /// </summary>
     internal sealed class ArrangeDimensionsCommand
@@ -169,7 +169,7 @@ namespace NxArrangeDimensions
             }
 
             IDictionary<int, double> newOffsets =
-                DimensionLayout.Compute(items, settings.Spacing, settings.Order, settings.RowTolerance);
+                DimensionLayout.Compute(items, settings.Mode, settings.Spacing, settings.Order, settings.RowTolerance);
 
             Session.UndoMarkId mark = _session.SetUndoMark(Session.MarkVisibility.Visible, Title);
 
