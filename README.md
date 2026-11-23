@@ -3,7 +3,10 @@
 Solid Edge의 *Arrange Dimensions*와 비슷하게, NX 도면 치수를 **기준치수에서 일정 간격으로 정렬**하는 NX Open(VB.NET) 도구입니다.
 
 - 대상: NX 2606, VB.NET / .NET Framework 4.8 (x64)
-- 1차 버전 지원 치수: 수평(Horizontal), 수직(Vertical)
+- 지원 치수: 수평 또는 수직으로 측정하는 선형 치수
+  - 방향 판정 순서: ① 치수 형식(`HorizontalDimension`/`VerticalDimension`) → ② 선형 치수 빌더의 측정 방법(`Measurement.Method` = Horizontal/Vertical) → ③ 형식 이름
+  - 기준치수의 방향을 판정하지 못하면 입력 창에서 쌓는 방향(위/아래, 좌/우)을 고릅니다.
+  - 정렬 대상 중 방향이 확실히 반대인 치수만 제외하고, 판정할 수 없는 치수는 기준치수 방향에 맞춰 정렬합니다.
 
 ## 사용 흐름
 

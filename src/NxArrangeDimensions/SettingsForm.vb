@@ -12,8 +12,10 @@ Public NotInheritable Class SettingsForm
     Private ReadOnly _orderGroup As GroupBox
     Private ReadOnly _bySize As RadioButton
     Private ReadOnly _keepCurrent As RadioButton
+    Private ReadOnly _axisY As RadioButton
+    Private ReadOnly _axisX As RadioButton
 
-    Private Sub New(initial As ArrangeSettings, targetCount As Integer)
+    Private Sub New(initial As ArrangeSettings, targetCount As Integer, refAxis As StackAxis)
         Text = "Arrange Dimensions"
         FormBorderStyle = FormBorderStyle.FixedDialog
         StartPosition = FormStartPosition.CenterParent
@@ -21,7 +23,10 @@ Public NotInheritable Class SettingsForm
         MinimizeBox = False
         ShowInTaskbar = False
         AutoScaleMode = AutoScaleMode.Font
-        ClientSize = New Size(300, 290)
+        ' 기준치수 방향을 판정하지 못한 경우에만 "쌓는 방향" 그룹 표시
+        Dim askAxis As Boolean = (refAxis = StackAxis.None)
+        Dim dy As Integer = If(askAxis, 76, 0)
+        ClientSize = New Size(300, 290 + dy)
 
         Dim info As New Label With {
             .Text = "정렬 대상 치수: " & targetCount & "개",
@@ -32,7 +37,7 @@ Public NotInheritable Class SettingsForm
         ' 배치 형태
         Dim modeGroup As New GroupBox With {
             .Text = "배치 형태",
-            .Location = New Point(12, 36),
+            .Location = New Point(12, 36 + dy),
             .Size = New Size(276, 92)
         }
         _serial = New RadioButton With {
@@ -58,11 +63,11 @@ Public NotInheritable Class SettingsForm
         ' 간격
         Dim spacingLabel As New Label With {
             .Text = "치수 간격:",
-            .Location = New Point(12, 141),
+            .Location = New Point(12, 141 + dy),
             .AutoSize = True
         }
         _spacing = New NumericUpDown With {
-            .Location = New Point(110, 138),
+            .Location = New Point(110, 138 + dy),
             .Width = 100,
             .DecimalPlaces = 2,
             .Minimum = 0.01D,
@@ -74,7 +79,7 @@ Public NotInheritable Class SettingsForm
         ' 쌓는 순서
         _orderGroup = New GroupBox With {
             .Text = "쌓는 순서",
-            .Location = New Point(12, 168),
+            .Location = New Point(12, 168 + dy),
             .Size = New Size(276, 70)
         }
         _bySize = New RadioButton With {
@@ -91,12 +96,35 @@ Public NotInheritable Class SettingsForm
         }
         _orderGroup.Controls.AddRange(New Control() {_bySize, _keepCurrent})
 
-        Dim ok As New Button With {.Text = "확인", .DialogResult = DialogResult.OK, .Location = New Point(132, 252), .Width = 75}
-        Dim cancel As New Button With {.Text = "취소", .DialogResult = DialogResult.Cancel, .Location = New Point(213, 252), .Width = 75}
+        Dim ok As New Button With {.Text = "확인", .DialogResult = DialogResult.OK, .Location = New Point(132, 252 + dy), .Width = 75}
+        Dim cancel As New Button With {.Text = "취소", .DialogResult = DialogResult.Cancel, .Location = New Point(213, 252 + dy), .Width = 75}
         AcceptButton = ok
         CancelButton = cancel
 
         Controls.AddRange(New Control() {info, modeGroup, spacingLabel, _spacing, _orderGroup, ok, cancel})
+
+        ' 쌓는 방향 (기준치수 유형으로 방향을 알 수 없을 때)
+        _axisY = New RadioButton With {
+            .Text = "위/아래로 쌓기 (수평 측정 치수)",
+            .Location = New Point(10, 20),
+            .AutoSize = True,
+            .Checked = (initial.Axis <> StackAxis.X)
+        }
+        _axisX = New RadioButton With {
+            .Text = "좌/우로 쌓기 (수직 측정 치수)",
+            .Location = New Point(10, 43),
+            .AutoSize = True,
+            .Checked = (initial.Axis = StackAxis.X)
+        }
+        If askAxis Then
+            Dim axisGroup As New GroupBox With {
+                .Text = "쌓는 방향 (기준치수 방향을 판정하지 못함)",
+                .Location = New Point(12, 36),
+                .Size = New Size(276, 70)
+            }
+            axisGroup.Controls.AddRange(New Control() {_axisY, _axisX})
+            Controls.Add(axisGroup)
+        End If
 
         ' 직렬은 간격/순서가 필요 없으므로 비활성화
         AddHandler _serial.CheckedChanged, AddressOf SyncEnabled
@@ -112,8 +140,8 @@ Public NotInheritable Class SettingsForm
     End Sub
 
     ''' <summary>대화상자를 띄우고 입력값을 반환. 취소 시 Nothing.</summary>
-    Public Shared Function Ask(initial As ArrangeSettings, targetCount As Integer) As ArrangeSettings
-        Using form As New SettingsForm(initial, targetCount)
+    Public Shared Function Ask(initial As ArrangeSettings, targetCount As Integer, refAxis As StackAxis) As ArrangeSettings
+        Using form As New SettingsForm(initial, targetCount, refAxis)
             Try
                 ' NX 메인 창을 부모로 지정 (NX 뒤로 숨는 문제 방지)
                 NXOpenUI.FormUtilities.SetApplicationIcon(form)
@@ -136,7 +164,9 @@ Public NotInheritable Class SettingsForm
             Return New ArrangeSettings With {
                 .Mode = mode,
                 .Spacing = CDbl(form._spacing.Value),
-                .Order = If(form._keepCurrent.Checked, ArrangeOrder.KeepCurrent, ArrangeOrder.BySizeAscending)
+                .Order = If(form._keepCurrent.Checked, ArrangeOrder.KeepCurrent, ArrangeOrder.BySizeAscending),
+                .Axis = If(refAxis <> StackAxis.None, refAxis,
+                           If(form._axisX.Checked, StackAxis.X, StackAxis.Y))
             }
         End Using
     End Function

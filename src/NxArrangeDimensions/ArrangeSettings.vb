@@ -8,6 +8,9 @@ Public NotInheritable Class ArrangeSettings
     Public Property Mode As ArrangeMode = ArrangeMode.Parallel
     Public Property Order As ArrangeOrder = ArrangeOrder.BySizeAscending
 
+    ''' <summary>기준치수 방향을 판정하지 못했을 때 사용자가 고른 방향 (저장 안 함)</summary>
+    Public Property Axis As StackAxis = StackAxis.Y
+
     ''' <summary>같은 줄로 간주하는 허용 거리 = Spacing × 이 비율</summary>
     Public Const RowToleranceRatio As Double = 0.25
 
