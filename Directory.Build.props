@@ -1,0 +1,39 @@
+<Project>
+  <!--
+    모든 프로젝트 공통 설정.
+    NX 설치 경로는 다음 순서로 결정됩니다.
+      1) MSBuild 속성 NXBaseDir  (예: msbuild /p:NXBaseDir="D:\Siemens\NX2606")
+      2) 환경변수 UGII_BASE_DIR
+      3) 기본값 C:\Program Files\Siemens\NX2606
+  -->
+  <PropertyGroup>
+    <NXBaseDir Condition="'$(NXBaseDir)' == ''">$(UGII_BASE_DIR)</NXBaseDir>
+    <NXBaseDir Condition="'$(NXBaseDir)' == ''">C:\Program Files\Siemens\NX2606</NXBaseDir>
+    <NXBaseDir>$(NXBaseDir.TrimEnd('\'))</NXBaseDir>
+    <NXBinDir>$(NXBaseDir)\NXBIN</NXBinDir>
+    <NXManagedDir>$(NXBinDir)\managed</NXManagedDir>
+
+    <!-- true 로 주면 빌드 후 NX SignDotNet.exe 로 서명 (dotnet_author 라이선스가 없을 때 필요) -->
+    <NXSignOnBuild Condition="'$(NXSignOnBuild)' == ''">false</NXSignOnBuild>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <OptionExplicit>On</OptionExplicit>
+    <OptionStrict>On</OptionStrict>
+    <OptionInfer>On</OptionInfer>
+    <OptionCompare>Binary</OptionCompare>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Company>NX_01</Company>
+    <Product>NX_01</Product>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <!-- VS 에 .NET Framework 4.8 Targeting Pack 이 없어도 빌드되도록 -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

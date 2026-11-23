@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 외부 실행 EXE: NX 를 배치(batch) 모드로 띄워서 작업합니다. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>NxExternal</RootNamespace>
+    <AssemblyName>NxExternal</AssemblyName>
+    <StartupObject>NxExternal.Program</StartupObject>
+    <UseNXOpen>true</UseNXOpen>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NxCommon\NxCommon.vbproj" />
+  </ItemGroup>
+</Project>

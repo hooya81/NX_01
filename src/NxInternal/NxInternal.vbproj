@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 내부 DLL: NX 세션 안에서 실행 (File > Execute > NX Open..., 메뉴/리본, startup 등) -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <RootNamespace>NxInternal</RootNamespace>
+    <AssemblyName>NxInternal</AssemblyName>
+    <UseNXOpen>true</UseNXOpen>
+    <UseNXOpenUI>true</UseNXOpenUI>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NxCommon\NxCommon.vbproj" />
+  </ItemGroup>
+</Project>

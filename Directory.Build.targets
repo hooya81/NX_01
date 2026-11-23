@@ -1,0 +1,34 @@
+<Project>
+  <!-- NX 공용 어셈블리 참조 (Copy Local = False : 실행 시 NX 설치 폴더의 DLL 사용) -->
+  <ItemGroup Condition="'$(UseNXOpen)' == 'true'">
+    <Reference Include="NXOpen">
+      <HintPath>$(NXManagedDir)\NXOpen.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="NXOpen.UF">
+      <HintPath>$(NXManagedDir)\NXOpen.UF.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="NXOpen.Utilities">
+      <HintPath>$(NXManagedDir)\NXOpen.Utilities.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- UI(블록스타일러, 메시지박스, 선택 등)가 필요한 프로젝트만 -->
+  <ItemGroup Condition="'$(UseNXOpenUI)' == 'true'">
+    <Reference Include="NXOpenUI">
+      <HintPath>$(NXManagedDir)\NXOpenUI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="NXCheckInstall" BeforeTargets="ResolveAssemblyReferences" Condition="'$(UseNXOpen)' == 'true' And !Exists('$(NXManagedDir)\NXOpen.dll')">
+    <Warning Text="NXOpen.dll 을 찾을 수 없습니다: $(NXManagedDir)\NXOpen.dll  (UGII_BASE_DIR 환경변수 또는 /p:NXBaseDir 를 확인하세요)" />
+  </Target>
+
+  <!-- 선택: NX 서명 (dotnet_author 라이선스 없이 NX 에서 DLL/EXE 를 실행하려면 필요) -->
+  <Target Name="NXSignAssembly" AfterTargets="Build" Condition="'$(NXSignOnBuild)' == 'true' And '$(UseNXOpen)' == 'true'">
+    <Exec Command="&quot;$(NXBinDir)\SignDotNet.exe&quot; &quot;$(TargetPath)&quot;" />
+  </Target>
+</Project>

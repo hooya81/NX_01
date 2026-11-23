@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 공용 라이브러리: 외부 EXE / 내부 DLL 이 함께 쓰는 NX 기능을 여기에 추가합니다. -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <RootNamespace>NxCommon</RootNamespace>
+    <AssemblyName>NxCommon</AssemblyName>
+    <UseNXOpen>true</UseNXOpen>
+  </PropertyGroup>
+</Project>
