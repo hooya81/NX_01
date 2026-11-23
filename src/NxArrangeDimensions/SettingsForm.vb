@@ -15,7 +15,7 @@ Public NotInheritable Class SettingsForm
     Private ReadOnly _axisY As RadioButton
     Private ReadOnly _axisX As RadioButton
 
-    Private Sub New(initial As ArrangeSettings, targetCount As Integer, refAxis As StackAxis)
+    Private Sub New(initial As ArrangeSettings, targetCount As Integer, askAxis As Boolean)
         Text = "Arrange Dimensions"
         FormBorderStyle = FormBorderStyle.FixedDialog
         StartPosition = FormStartPosition.CenterParent
@@ -24,7 +24,6 @@ Public NotInheritable Class SettingsForm
         ShowInTaskbar = False
         AutoScaleMode = AutoScaleMode.Font
         ' 기준치수 방향을 판정하지 못한 경우에만 "쌓는 방향" 그룹 표시
-        Dim askAxis As Boolean = (refAxis = StackAxis.None)
         Dim dy As Integer = If(askAxis, 76, 0)
         ClientSize = New Size(300, 290 + dy)
 
@@ -140,8 +139,9 @@ Public NotInheritable Class SettingsForm
     End Sub
 
     ''' <summary>대화상자를 띄우고 입력값을 반환. 취소 시 Nothing.</summary>
-    Public Shared Function Ask(initial As ArrangeSettings, targetCount As Integer, refAxis As StackAxis) As ArrangeSettings
-        Using form As New SettingsForm(initial, targetCount, refAxis)
+    ''' <param name="askAxis">True면 "쌓는 방향" 선택을 표시 (기준치수 방향을 판정하지 못한 경우)</param>
+    Public Shared Function Ask(initial As ArrangeSettings, targetCount As Integer, askAxis As Boolean) As ArrangeSettings
+        Using form As New SettingsForm(initial, targetCount, askAxis)
             Try
                 ' NX 메인 창을 부모로 지정 (NX 뒤로 숨는 문제 방지)
                 NXOpenUI.FormUtilities.SetApplicationIcon(form)
@@ -165,7 +165,7 @@ Public NotInheritable Class SettingsForm
                 .Mode = mode,
                 .Spacing = CDbl(form._spacing.Value),
                 .Order = If(form._keepCurrent.Checked, ArrangeOrder.KeepCurrent, ArrangeOrder.BySizeAscending),
-                .Axis = If(refAxis <> StackAxis.None, refAxis,
+                .Axis = If(Not askAxis, initial.Axis,
                            If(form._axisX.Checked, StackAxis.X, StackAxis.Y))
             }
         End Using

@@ -3,10 +3,11 @@
 Solid Edge의 *Arrange Dimensions*와 비슷하게, NX 도면 치수를 **기준치수에서 일정 간격으로 정렬**하는 NX Open(VB.NET) 도구입니다.
 
 - 대상: NX 2606, VB.NET / .NET Framework 4.8 (x64)
-- 지원 치수: 수평 또는 수직으로 측정하는 선형 치수
-  - 방향 판정 순서: ① 치수 형식(`HorizontalDimension`/`VerticalDimension`) → ② 선형 치수 빌더의 측정 방법(`Measurement.Method` = Horizontal/Vertical) → ③ 형식 이름
+- 지원 치수
+  - 수평/수직으로 측정하는 선형 치수: 치수 형식(`HorizontalDimension`/`VerticalDimension`), 선형 치수 빌더의 측정 방법(`Measurement.Method`), 형식 이름 순으로 방향을 판정합니다.
+  - **수직거리 치수(`PerpendicularDimension`)**: 기준선(직선 곡선 또는 직선 모서리)의 시트상 방향을 읽어, 기준선과 나란한 방향으로 쌓습니다. 기울어진 선이면 그 각도로 쌓습니다.
   - 기준치수의 방향을 판정하지 못하면 입력 창에서 쌓는 방향(위/아래, 좌/우)을 고릅니다.
-  - 정렬 대상 중 방향이 확실히 반대인 치수만 제외하고, 판정할 수 없는 치수는 기준치수 방향에 맞춰 정렬합니다.
+  - 정렬 대상 중 방향이 확실히 다른 치수(허용 각도 1°)만 제외하고, 판정할 수 없는 치수는 기준치수 방향에 맞춰 정렬합니다.
 
 ## 사용 흐름
 
@@ -50,6 +51,7 @@ dotnet build -c Release
 |---|---|
 | `Program.vb` | NX 진입점(`Main`, `GetUnloadOption`) |
 | `ArrangeDimensionsCommand.vb` | 선택, NX 치수 읽기와 이동, Undo 처리 |
+| `StackDirection.vb` | 쌓는 방향(단위 벡터) 계산. NX와 무관하므로 단독으로 테스트할 수 있습니다 |
 | `DimensionLayout.vb` | 배치 계산. NX와 무관하므로 단독으로 테스트할 수 있습니다 |
 | `SettingsForm.vb` | 간격과 정렬 순서 입력 대화상자(WinForms) |
 | `ArrangeSettings.vb` | 입력값 저장과 불러오기 |

@@ -2,16 +2,19 @@ Imports NXOpen
 Imports NXOpen.Annotations
 Imports NXOpen.UF
 
-''' <summary>치수를 쌓는 축 (치수선에 수직인 방향)</summary>
+''' <summary>사용자가 고르는 쌓는 방향 (기준치수 방향을 판정하지 못했을 때)</summary>
 Public Enum StackAxis
     None
-    X ' 수직 측정 치수: 좌/우로 쌓음
-    Y ' 수평 측정 치수: 위/아래로 쌓음
+    X ' 좌/우로 쌓음 (수직 측정 치수)
+    Y ' 위/아래로 쌓음 (수평 측정 치수)
 End Enum
 
 ''' <summary>
 ''' 기준치수 선택 → 정렬할 치수 선택 → 형태(직렬/병렬/혼합)·간격 입력 → 기준치수 기준으로 배치.
-''' 방향 판정: 치수 형식 → 선형 치수 측정 방법 → 형식 이름 순. 판정할 수 없으면 사용자가 방향을 고름.
+''' 쌓는 방향 판정:
+'''   수평/수직 치수 → 형식 또는 측정 방법으로 판정
+'''   수직거리(Perpendicular) 치수 → 기준선의 시트상 방향 (기울어진 선이면 그 각도로 쌓음)
+'''   판정 불가 → 사용자가 입력 창에서 방향 선택
 ''' </summary>
 Friend NotInheritable Class ArrangeDimensionsCommand
 
@@ -19,11 +22,16 @@ Friend NotInheritable Class ArrangeDimensionsCommand
 
     Private ReadOnly _session As Session
     Private ReadOnly _ui As UI
+    Private ReadOnly _uf As UFSession
     Private _workPart As Part
+
+    ''' <summary>치수별 방향 판정 결과 캐시 (빌더 생성 횟수 줄이기)</summary>
+    Private ReadOnly _dirCache As New Dictionary(Of Tag, StackDirection)()
 
     Public Sub New(theSession As Session, theUI As UI)
         _session = theSession
         _ui = theUI
+        _uf = UFSession.GetUFSession()
     End Sub
 
     Public Sub Run()
@@ -37,8 +45,8 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         Dim refDim As Dimension = SelectReferenceDimension()
         If refDim Is Nothing Then Return
 
-        ' 방향을 판정하지 못해도(None) 진행: 입력 창에서 사용자가 방향을 고름
-        Dim refAxis As StackAxis = GetStackAxis(refDim)
+        ' 방향을 판정하지 못해도 진행: 입력 창에서 사용자가 방향을 고름
+        Dim refDir As StackDirection = GetStackDirection(refDim)
 
         refDim.Highlight()
         Try
@@ -47,18 +55,18 @@ Friend NotInheritable Class ArrangeDimensionsCommand
             If selected Is Nothing OrElse selected.Count = 0 Then Return
 
             ' 3) 형태/간격/순서(+ 필요 시 방향) 입력
-            Dim settings As ArrangeSettings = SettingsForm.Ask(ArrangeSettings.Load(), selected.Count, refAxis)
+            Dim settings As ArrangeSettings = SettingsForm.Ask(ArrangeSettings.Load(), selected.Count, Not refDir.IsValid)
             If settings Is Nothing Then Return
             settings.Save()
 
-            Dim axis As StackAxis = If(refAxis <> StackAxis.None, refAxis, settings.Axis)
+            Dim dir As StackDirection = If(refDir.IsValid, refDir, StackDirection.FromAxis(settings.Axis))
 
-            ' 4) 방향이 확실히 반대인 치수만 제외. 판정 불가(None) 치수는 사용자가 고른 것이므로 포함.
+            ' 4) 방향이 확실히 다른 치수만 제외. 판정 불가 치수는 사용자가 고른 것이므로 포함.
             Dim targets As New List(Of Dimension)()
             Dim skipped As Integer = 0
             For Each d In selected
-                Dim a As StackAxis = GetStackAxis(d)
-                If a = StackAxis.None OrElse a = axis Then
+                Dim td As StackDirection = GetStackDirection(d)
+                If Not td.IsValid OrElse td.IsParallelTo(dir) Then
                     targets.Add(d)
                 Else
                     skipped += 1
@@ -74,7 +82,7 @@ Friend NotInheritable Class ArrangeDimensionsCommand
             End If
 
             ' 5) 배치 계산 및 적용
-            Apply(refDim, refAxis, targets, axis, settings)
+            Apply(refDim, refDir, targets, dir, settings)
         Finally
             refDim.Unhighlight()
         End Try
@@ -141,47 +149,124 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         Return result
     End Function
 
-    ''' <summary>
-    ''' 치수의 쌓는 축 판정.
-    ''' 1) 형식: HorizontalDimension / VerticalDimension
-    ''' 2) 선형 치수 빌더의 측정 방법(Measurement.Method): Horizontal / Vertical
-    '''    (Rapid/Linear 명령으로 만들어 형식이 다르게 나오는 경우 대비)
-    ''' 3) 형식 이름이 Horizontal*/Vertical* 로 시작 (Ordinate 제외)
-    ''' 판정 불가 시 None.
-    ''' </summary>
-    Friend Function GetStackAxis(d As Dimension) As StackAxis
-        If TypeOf d Is HorizontalDimension Then Return StackAxis.Y
-        If TypeOf d Is VerticalDimension Then Return StackAxis.X
+    ' ---------------------------------------------------------------- 방향 판정
 
-        Dim byMethod As StackAxis = AxisFromMeasurementMethod(d)
-        If byMethod <> StackAxis.None Then Return byMethod
+    ''' <summary>
+    ''' 치수의 쌓는 방향 판정 (판정 불가 시 StackDirection.None).
+    ''' 1) 형식: HorizontalDimension / VerticalDimension
+    ''' 2) 형식: PerpendicularDimension → 기준선의 시트상 방향
+    ''' 3) 선형 치수 빌더의 측정 방법(Measurement.Method): Horizontal / Vertical
+    ''' 4) 형식 이름이 Horizontal*/Vertical* 로 시작 (Ordinate 제외)
+    ''' </summary>
+    Friend Function GetStackDirection(d As Dimension) As StackDirection
+        Dim cached As StackDirection
+        If _dirCache.TryGetValue(d.Tag, cached) Then Return cached
+
+        Dim result As StackDirection = DetectStackDirection(d)
+        _dirCache(d.Tag) = result
+        Return result
+    End Function
+
+    Private Function DetectStackDirection(d As Dimension) As StackDirection
+        If TypeOf d Is HorizontalDimension Then Return StackDirection.AlongY
+        If TypeOf d Is VerticalDimension Then Return StackDirection.AlongX
+
+        If TypeOf d Is PerpendicularDimension Then
+            Dim perp As StackDirection = DirectionOfPerpendicular(d)
+            If perp.IsValid Then Return perp
+        End If
+
+        Dim byMethod As StackDirection = DirectionFromMeasurementMethod(d)
+        If byMethod.IsValid Then Return byMethod
 
         Dim name As String = d.GetType().Name
         If name.IndexOf("Ordinate", StringComparison.OrdinalIgnoreCase) < 0 Then
-            If name.StartsWith("Horizontal", StringComparison.OrdinalIgnoreCase) Then Return StackAxis.Y
-            If name.StartsWith("Vertical", StringComparison.OrdinalIgnoreCase) Then Return StackAxis.X
+            If name.StartsWith("Horizontal", StringComparison.OrdinalIgnoreCase) Then Return StackDirection.AlongY
+            If name.StartsWith("Vertical", StringComparison.OrdinalIgnoreCase) Then Return StackDirection.AlongX
         End If
 
-        Return StackAxis.None
+        Return StackDirection.None
     End Function
 
-    Private Function AxisFromMeasurementMethod(d As Dimension) As StackAxis
+    Private Function DirectionFromMeasurementMethod(d As Dimension) As StackDirection
         Dim b As LinearDimensionBuilder = Nothing
         Try
             ' 읽기만 하고 Commit 하지 않음
             b = _workPart.Dimensions.CreateLinearDimensionBuilder(d)
             Select Case b.Measurement.Method
                 Case DimensionMeasurementBuilder.MeasurementMethod.Horizontal
-                    Return StackAxis.Y
+                    Return StackDirection.AlongY
                 Case DimensionMeasurementBuilder.MeasurementMethod.Vertical
-                    Return StackAxis.X
+                    Return StackDirection.AlongX
             End Select
         Catch ex As NXException
             ' 선형 치수가 아님(반경/각도 등) → 판정 불가
         Finally
             If b IsNot Nothing Then b.Destroy()
         End Try
-        Return StackAxis.None
+        Return StackDirection.None
+    End Function
+
+    ''' <summary>
+    ''' 수직거리(Perpendicular) 치수: 치수선은 기준선에 수직이므로, 치수를 쌓는 방향은 기준선과 나란한 방향.
+    ''' 연관 객체(첫 번째/두 번째) 중 직선을 찾아 시트 좌표로 변환한 방향을 사용.
+    ''' </summary>
+    Private Function DirectionOfPerpendicular(d As Dimension) As StackDirection
+        Dim b As LinearDimensionBuilder = Nothing
+        Try
+            ' 읽기만 하고 Commit 하지 않음
+            b = _workPart.Dimensions.CreateLinearDimensionBuilder(d)
+            For Each sel As SelectNXObject In New SelectNXObject() {b.FirstAssociativity, b.SecondAssociativity}
+                If sel Is Nothing Then Continue For
+
+                Dim obj As TaggedObject = Nothing
+                Dim view As View = Nothing
+                Dim pick As Point3d
+                sel.GetValue(obj, view, pick)
+
+                Dim p1 As Point3d, p2 As Point3d
+                If Not TryGetLineEnds(obj, p1, p2) Then Continue For
+
+                Dim s1 As Double() = ToSheet(p1, view)
+                Dim s2 As Double() = ToSheet(p2, view)
+                Dim dir As New StackDirection(s2(0) - s1(0), s2(1) - s1(1))
+                If dir.IsValid Then Return dir
+            Next
+        Catch ex As NXException
+            ' 판정 불가
+        Finally
+            If b IsNot Nothing Then b.Destroy()
+        End Try
+        Return StackDirection.None
+    End Function
+
+    ''' <summary>직선(곡선 Line 또는 직선 모서리 Edge)의 양 끝점</summary>
+    Private Shared Function TryGetLineEnds(obj As TaggedObject, ByRef p1 As Point3d, ByRef p2 As Point3d) As Boolean
+        Dim ln = TryCast(obj, Line)
+        If ln IsNot Nothing Then
+            p1 = ln.StartPoint
+            p2 = ln.EndPoint
+            Return True
+        End If
+
+        Dim e = TryCast(obj, Edge)
+        If e IsNot Nothing AndAlso e.SolidEdgeType = Edge.EdgeType.Linear Then
+            e.GetVertices(p1, p2)
+            Return True
+        End If
+
+        Return False
+    End Function
+
+    ''' <summary>도면 뷰 안의 객체면 모델 좌표 → 시트 좌표로 변환, 시트 위 객체면 그대로</summary>
+    Private Function ToSheet(p As Point3d, view As View) As Double()
+        If TypeOf view Is Drawings.DraftingView Then
+            Dim model As Double() = {p.X, p.Y, p.Z}
+            Dim sheet(1) As Double
+            _uf.View.MapModelToDrawing(view.Tag, model, sheet)
+            Return sheet
+        End If
+        Return New Double() {p.X, p.Y}
     End Function
 
     ' ---------------------------------------------------------------- 적용
@@ -189,14 +274,14 @@ Friend NotInheritable Class ArrangeDimensionsCommand
     ''' <summary>True면 치수별 계산/이동 내역을 정보 창(Listing Window)에 출력 (문제 확인용)</summary>
     Private Const DebugLog As Boolean = True
 
-    Private Sub Apply(refDim As Dimension, refAxis As StackAxis, targets As List(Of Dimension),
-                      axis As StackAxis, settings As ArrangeSettings)
-        Dim refCoord As Double = Coord(refDim.AnnotationOrigin, axis)
+    Private Sub Apply(refDim As Dimension, refDir As StackDirection, targets As List(Of Dimension),
+                      dir As StackDirection, settings As ArrangeSettings)
+        Dim refCoord As Double = Coord(refDim.AnnotationOrigin, dir)
 
         Dim items As New List(Of LayoutItem)(targets.Count)
         For i = 0 To targets.Count - 1
             Dim o As Point3d = targets(i).AnnotationOrigin
-            items.Add(New LayoutItem(i, Coord(o, axis) - refCoord, SafeSize(targets(i))))
+            items.Add(New LayoutItem(i, Coord(o, dir) - refCoord, SafeSize(targets(i))))
         Next
 
         Dim newOffsets As IDictionary(Of Integer, Double) =
@@ -208,9 +293,9 @@ Friend NotInheritable Class ArrangeDimensionsCommand
             log.Open()
             log.WriteLine("=== " & Title & " ===")
             log.WriteLine("형태=" & settings.Mode.ToString() & ", 간격=" & settings.Spacing &
-                          ", 순서=" & settings.Order.ToString() & ", 축=" & axis.ToString())
+                          ", 순서=" & settings.Order.ToString() & ", 쌓는방향=" & dir.ToString())
             log.WriteLine("기준치수 Tag=" & CULng(refDim.Tag) & ", 유형=" & refDim.GetType().Name &
-                          ", 판정=" & refAxis.ToString() & ", 기준좌표=" & refCoord)
+                          ", 판정=" & refDir.ToString() & ", 기준좌표=" & refCoord)
             log.WriteLine("대상 " & targets.Count & "개 / 계산결과 " & newOffsets.Count & "개")
         End If
 
@@ -220,9 +305,12 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         For i = 0 To targets.Count - 1
             Dim d As Dimension = targets(i)
             Dim o As Point3d = d.AnnotationOrigin
-            Dim prefix As String = "[" & i & "] Tag=" & CULng(d.Tag) & " 유형=" & d.GetType().Name &
-                                   " 판정=" & If(log IsNot Nothing, GetStackAxis(d).ToString(), "") & " 현재=" & Coord(o, axis) &
-                                   " 오프셋=" & items(i).Offset & " 크기=" & items(i).Size
+            Dim prefix As String = ""
+            If log IsNot Nothing Then
+                prefix = "[" & i & "] Tag=" & CULng(d.Tag) & " 유형=" & d.GetType().Name &
+                         " 판정=" & GetStackDirection(d).ToString() & " 현재=" & Coord(o, dir) &
+                         " 오프셋=" & items(i).Offset & " 크기=" & items(i).Size
+            End If
 
             Dim newOffset As Double
             If Not newOffsets.TryGetValue(i, newOffset) Then
@@ -231,19 +319,19 @@ Friend NotInheritable Class ArrangeDimensionsCommand
                 Continue For
             End If
 
-            Dim n As Point3d = WithCoord(o, axis, refCoord + newOffset)
+            Dim n As Point3d = WithCoord(o, dir, refCoord + newOffset)
 
-            If Math.Abs(Coord(n, axis) - Coord(o, axis)) < 0.000000001 Then
-                If log IsNot Nothing Then log.WriteLine(prefix & " -> 이미 위치에 있음 (" & Coord(n, axis) & ")")
+            If Math.Abs(Coord(n, dir) - Coord(o, dir)) < 0.000000001 Then
+                If log IsNot Nothing Then log.WriteLine(prefix & " -> 이미 위치에 있음 (" & Coord(n, dir) & ")")
                 Continue For
             End If
 
-            ' 치수선(텍스트) 위치만 쌓는 축 방향으로 이동. 다른 축 좌표는 유지.
+            ' 치수선(텍스트) 위치를 쌓는 방향으로만 이동. 치수선 방향 위치는 유지.
             d.AnnotationOrigin = n
             moved += 1
 
             If log IsNot Nothing Then
-                log.WriteLine(prefix & " -> 이동 " & Coord(n, axis) & " (설정 후 읽은 값=" & Coord(d.AnnotationOrigin, axis) & ")")
+                log.WriteLine(prefix & " -> 이동 " & Coord(n, dir) & " (설정 후 읽은 값=" & Coord(d.AnnotationOrigin, dir) & ")")
             End If
         Next
 
@@ -264,15 +352,15 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         End Try
     End Function
 
-    Private Shared Function Coord(p As Point3d, axis As StackAxis) As Double
-        Return If(axis = StackAxis.X, p.X, p.Y)
+    ''' <summary>점의 쌓는 방향 좌표</summary>
+    Private Shared Function Coord(p As Point3d, dir As StackDirection) As Double
+        Return dir.CoordOf(p.X, p.Y)
     End Function
 
-    Private Shared Function WithCoord(p As Point3d, axis As StackAxis, value As Double) As Point3d
-        If axis = StackAxis.X Then
-            Return New Point3d(value, p.Y, p.Z)
-        End If
-        Return New Point3d(p.X, value, p.Z)
+    ''' <summary>쌓는 방향 좌표만 value로 바꾼 점 (치수선 방향 성분과 Z는 유지)</summary>
+    Private Shared Function WithCoord(p As Point3d, dir As StackDirection, value As Double) As Point3d
+        Dim delta As Double = value - Coord(p, dir)
+        Return New Point3d(p.X + delta * dir.X, p.Y + delta * dir.Y, p.Z)
     End Function
 
     ' ---------------------------------------------------------------- 메시지
