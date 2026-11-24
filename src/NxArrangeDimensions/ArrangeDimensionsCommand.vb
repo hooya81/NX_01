@@ -209,7 +209,7 @@ Friend NotInheritable Class ArrangeDimensionsCommand
 
     ''' <summary>
     ''' 수직거리(Perpendicular) 치수: 치수선은 기준선에 수직이므로, 치수를 쌓는 방향은 기준선과 나란한 방향.
-    ''' 연관 객체(첫 번째/두 번째) 중 직선을 찾아 시트 좌표로 변환한 방향을 사용.
+    ''' 연관 객체(첫 번째/두 번째) 중 직선(Line / 직선 Edge / 직선 DraftingCurve 등)을 찾아 시트상 방향을 사용.
     ''' </summary>
     Private Function DirectionOfPerpendicular(d As Dimension) As StackDirection
         Dim b As LinearDimensionBuilder = Nothing
@@ -224,49 +224,111 @@ Friend NotInheritable Class ArrangeDimensionsCommand
                 Dim pick As Point3d
                 sel.GetValue(obj, view, pick)
 
-                Dim p1 As Point3d, p2 As Point3d
-                If Not TryGetLineEnds(obj, p1, p2) Then Continue For
+                Dim ends As List(Of Point3d) = CurveEndPoints(obj, True)
+                If ends.Count < 2 Then Continue For
 
-                Dim s1 As Double() = ToSheet(p1, view)
-                Dim s2 As Double() = ToSheet(p2, view)
-                Dim dir As New StackDirection(s2(0) - s1(0), s2(1) - s1(1))
+                Dim sheet As List(Of Double()) = ToSheetPoints(obj, ends, view, d.AnnotationOrigin)
+                Dim dir As New StackDirection(sheet(1)(0) - sheet(0)(0), sheet(1)(1) - sheet(0)(1))
+                Diag("  수직거리 치수 Tag=" & CULng(d.Tag) & " 기준선=" & obj.GetType().Name &
+                     " 시트 끝점=(" & Fmt(sheet(0)) & ")~(" & Fmt(sheet(1)) & ") → 방향 " & dir.ToString())
                 If dir.IsValid Then Return dir
             Next
+            Diag("  수직거리 치수 Tag=" & CULng(d.Tag) & ": 연관 객체에서 직선을 찾지 못함")
         Catch ex As NXException
-            ' 판정 불가
+            Diag("  수직거리 치수 Tag=" & CULng(d.Tag) & " 판정 오류: " & ex.Message)
         Finally
             If b IsNot Nothing Then b.Destroy()
         End Try
         Return StackDirection.None
     End Function
 
-    ''' <summary>직선(곡선 Line 또는 직선 모서리 Edge)의 양 끝점</summary>
-    Private Shared Function TryGetLineEnds(obj As TaggedObject, ByRef p1 As Point3d, ByRef p2 As Point3d) As Boolean
+    ''' <summary>
+    ''' 곡선형 객체의 양 끝점.
+    ''' Line / Edge 는 NXOpen 속성으로, 그 밖의 곡선(DraftingCurve 등)은 UF_EVAL 로 계산.
+    ''' lineOnly = True 이면 직선일 때만 반환 (직선이 아니면 빈 목록).
+    ''' </summary>
+    Private Function CurveEndPoints(obj As TaggedObject, lineOnly As Boolean) As List(Of Point3d)
+        Dim pts As New List(Of Point3d)()
+        If obj Is Nothing Then Return pts
+
         Dim ln = TryCast(obj, Line)
         If ln IsNot Nothing Then
-            p1 = ln.StartPoint
-            p2 = ln.EndPoint
-            Return True
+            pts.Add(ln.StartPoint)
+            pts.Add(ln.EndPoint)
+            Return pts
         End If
 
         Dim e = TryCast(obj, Edge)
-        If e IsNot Nothing AndAlso e.SolidEdgeType = Edge.EdgeType.Linear Then
-            e.GetVertices(p1, p2)
-            Return True
+        If e IsNot Nothing Then
+            If lineOnly AndAlso e.SolidEdgeType <> Edge.EdgeType.Linear Then Return pts
+            Dim v1 As Point3d, v2 As Point3d
+            e.GetVertices(v1, v2)
+            pts.Add(v1)
+            pts.Add(v2)
+            Return pts
         End If
 
-        Return False
+        ' DraftingCurve 등: UF 곡선 계산기로 끝점 계산
+        Dim evaluator As IntPtr = IntPtr.Zero
+        Try
+            _uf.Eval.Initialize(obj.Tag, evaluator)
+
+            Dim isLine As Boolean = False
+            _uf.Eval.IsLine(evaluator, isLine)
+            If lineOnly AndAlso Not isLine Then Return pts
+
+            Dim limits(1) As Double
+            _uf.Eval.AskLimits(evaluator, limits)
+            For Each t In limits
+                Dim p(2) As Double
+                Dim deriv(2) As Double
+                _uf.Eval.Evaluate(evaluator, 0, t, p, deriv)
+                pts.Add(New Point3d(p(0), p(1), p(2)))
+            Next
+        Catch ex As NXException
+            Diag("  " & obj.GetType().Name & " 곡선 계산 실패: " & ex.Message)
+            pts.Clear()
+        Finally
+            If evaluator <> IntPtr.Zero Then _uf.Eval.Free(evaluator)
+        End Try
+        Return pts
     End Function
 
-    ''' <summary>도면 뷰 안의 객체면 모델 좌표 → 시트 좌표로 변환, 시트 위 객체면 그대로</summary>
-    Private Function ToSheet(p As Point3d, view As View) As Double()
-        If TypeOf view Is Drawings.DraftingView Then
-            Dim model As Double() = {p.X, p.Y, p.Z}
-            Dim sheet(1) As Double
-            _uf.View.MapModelToDrawing(view.Tag, model, sheet)
-            Return sheet
-        End If
-        Return New Double() {p.X, p.Y}
+    ''' <summary>
+    ''' 객체 좌표 → 시트 좌표.
+    ''' 도면 뷰(DraftingView) 안의 객체는 모델 좌표일 수도, 이미 시트 좌표일 수도 있음 (DraftingCurve 등).
+    ''' Edge 는 항상 모델 좌표 → 변환. 그 밖의 객체는 두 해석 중 치수(near)에 더 가까운 쪽을 사용.
+    ''' </summary>
+    Private Function ToSheetPoints(obj As TaggedObject, pts As List(Of Point3d), view As View,
+                                   near As Point3d) As List(Of Double())
+        Dim raw As List(Of Double()) = pts.Select(Function(p) New Double() {p.X, p.Y}).ToList()
+        If Not TypeOf view Is Drawings.DraftingView Then Return raw
+
+        Dim mapped As New List(Of Double())()
+        Try
+            For Each p In pts
+                Dim model As Double() = {p.X, p.Y, p.Z}
+                Dim sheet(1) As Double
+                _uf.View.MapModelToDrawing(view.Tag, model, sheet)
+                mapped.Add(sheet)
+            Next
+        Catch ex As NXException
+            Return raw
+        End Try
+
+        If TypeOf obj Is Edge Then Return mapped
+
+        Dim dRaw As Double = DistToCentroid(raw, near)
+        Dim dMapped As Double = DistToCentroid(mapped, near)
+        Diag("  " & obj.GetType().Name & " 좌표 해석: 그대로=" & Math.Round(dRaw, 2) &
+             ", 모델→시트 변환=" & Math.Round(dMapped, 2) & " (치수까지 거리, 가까운 쪽 사용)")
+        Return If(dMapped <= dRaw, mapped, raw)
+    End Function
+
+    Private Shared Function DistToCentroid(pts As List(Of Double()), p As Point3d) As Double
+        Dim cx As Double = pts.Average(Function(q) q(0))
+        Dim cy As Double = pts.Average(Function(q) q(1))
+        Return Math.Sqrt((cx - p.X) * (cx - p.X) + (cy - p.Y) * (cy - p.Y))
     End Function
 
     ''' <summary>
@@ -278,6 +340,7 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         Try
             ' 읽기만 하고 Commit 하지 않음
             b = _workPart.Dimensions.CreateLinearDimensionBuilder(refDim)
+            Dim origin As Point3d = refDim.AnnotationOrigin
             Dim sum As Double = 0
             Dim cnt As Integer = 0
             For Each sel As SelectNXObject In New SelectNXObject() {b.FirstAssociativity, b.SecondAssociativity}
@@ -288,50 +351,56 @@ Friend NotInheritable Class ArrangeDimensionsCommand
                 Dim pick As Point3d
                 sel.GetValue(obj, view, pick)
 
-                For Each gp In GeometryPoints(obj)
-                    Dim sp As Double() = ToSheet(gp, view)
+                Dim pts As List(Of Point3d) = GeometryPoints(obj)
+                If pts.Count = 0 Then Continue For
+
+                For Each sp In ToSheetPoints(obj, pts, view, origin)
                     sum += dir.CoordOf(sp(0), sp(1))
                     cnt += 1
                 Next
             Next
             If cnt = 0 Then Return 0
 
-            Dim diff As Double = Coord(refDim.AnnotationOrigin, dir) - sum / cnt
+            Dim diff As Double = Coord(origin, dir) - sum / cnt
+            Diag("  바깥쪽 판정: 치수 좌표=" & Math.Round(Coord(origin, dir), 3) &
+                 ", 형상 평균 좌표=" & Math.Round(sum / cnt, 3))
             If Math.Abs(diff) < 0.000001 Then Return 0
             Return Math.Sign(diff)
         Catch ex As NXException
+            Diag("  바깥쪽 판정 오류: " & ex.Message)
             Return 0
         Finally
             If b IsNot Nothing Then b.Destroy()
         End Try
     End Function
 
-    ''' <summary>연관 객체의 대표 점들 (모서리/선의 양 끝점, 점 좌표). 모르는 객체는 빈 목록.</summary>
-    Private Shared Function GeometryPoints(obj As TaggedObject) As List(Of Point3d)
-        Dim pts As New List(Of Point3d)()
-
-        Dim ln = TryCast(obj, Line)
-        If ln IsNot Nothing Then
-            pts.Add(ln.StartPoint)
-            pts.Add(ln.EndPoint)
-            Return pts
-        End If
-
-        Dim e = TryCast(obj, Edge)
-        If e IsNot Nothing Then
-            Dim v1 As Point3d, v2 As Point3d
-            e.GetVertices(v1, v2)
-            pts.Add(v1)
-            pts.Add(v2)
-            Return pts
-        End If
-
+    ''' <summary>연관 객체의 대표 점들 (곡선/모서리의 양 끝점, 점 좌표). 모르는 객체는 빈 목록.</summary>
+    Private Function GeometryPoints(obj As TaggedObject) As List(Of Point3d)
         Dim pt = TryCast(obj, Point)
         If pt IsNot Nothing Then
-            pts.Add(pt.Coordinates)
+            Return New List(Of Point3d) From {pt.Coordinates}
         End If
+        Return CurveEndPoints(obj, False)
+    End Function
 
-        Return pts
+    ' ---------------------------------------------------------------- 진단 로그
+
+    Private _diagOpened As Boolean = False
+
+    ''' <summary>DebugLog 가 켜져 있으면 정보 창에 진단 메시지 출력</summary>
+    Private Sub Diag(msg As String)
+        If Not DebugLog Then Return
+        Dim lw As ListingWindow = _session.ListingWindow
+        If Not _diagOpened Then
+            lw.Open()
+            lw.WriteLine("--- 방향/바깥쪽 판정 진단 ---")
+            _diagOpened = True
+        End If
+        lw.WriteLine(msg)
+    End Sub
+
+    Private Shared Function Fmt(p As Double()) As String
+        Return Math.Round(p(0), 3) & ", " & Math.Round(p(1), 3)
     End Function
 
     ' ---------------------------------------------------------------- 적용

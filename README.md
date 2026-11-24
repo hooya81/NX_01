@@ -5,7 +5,7 @@ Solid Edge의 *Arrange Dimensions*와 비슷하게, NX 도면 치수를 **기준
 - 대상: NX 2606, VB.NET / .NET Framework 4.8 (x64)
 - 지원 치수
   - 수평/수직으로 측정하는 선형 치수: 치수 형식(`HorizontalDimension`/`VerticalDimension`), 선형 치수 빌더의 측정 방법(`Measurement.Method`), 형식 이름 순으로 방향을 판정합니다.
-  - **수직거리 치수(`PerpendicularDimension`)**: 기준선(직선 곡선 또는 직선 모서리)의 시트상 방향을 읽어, 기준선과 나란한 방향으로 쌓습니다. 기울어진 선이면 그 각도로 쌓습니다.
+  - **수직거리 치수(`PerpendicularDimension`)**: 기준선(직선 `Line`, 직선 모서리 `Edge`, 도면 뷰 곡선 `DraftingCurve` 등)의 시트상 방향을 읽어, 기준선과 나란한 방향으로 쌓습니다. 기울어진 선이면 그 각도로 쌓습니다.
   - 기준치수의 방향을 판정하지 못하면 입력 창에서 쌓는 방향(위/아래, 좌/우)을 고릅니다.
   - 정렬 대상 중 방향이 확실히 다른 치수(허용 각도 1°)만 제외하고, 판정할 수 없는 치수는 기준치수 방향에 맞춰 정렬합니다.
 
