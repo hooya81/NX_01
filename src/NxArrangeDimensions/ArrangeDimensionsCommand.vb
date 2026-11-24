@@ -382,14 +382,43 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         '   3) UF_MODL 경계 상자  : 상자 대각선 끝점 (수평/수직 직선만 직선으로 인정)
         Dim errors As New List(Of String)()
 
+        ' UF 형식 확인: UF_EVAL / curve_props 는 실제 곡선(선/원호/원뿔곡선/스플라인/솔리드 모서리)에만 호출
+        ' (그 밖의 객체에 호출하면 "Unknown curve type" 등의 오류)
+        Dim ufType As Integer = -1, ufSubtype As Integer = -1
+        Try
+            _uf.Obj.AskTypeAndSubtype(obj.Tag, ufType, ufSubtype)
+        Catch ex As Exception
+            errors.Add("type: " & ex.Message)
+        End Try
+        Dim isCurve As Boolean = IsUfCurveType(ufType, ufSubtype)
+        Diag("  끝점 읽기 대상: " & obj.GetType().Name & " (UF type=" & ufType & ", subtype=" & ufSubtype &
+             If(isCurve, ", 곡선", ", 곡선 아님") & ")")
+
         If TryParentEnds(obj, lineOnly, pts, errors) Then Return pts
-        If TryEvalEnds(obj, lineOnly, pts, errors) Then Return pts
-        If TryCurvePropsEnds(obj, lineOnly, pts, errors) Then Return pts
+        If isCurve Then
+            If TryEvalEnds(obj, lineOnly, pts, errors) Then Return pts
+            If TryCurvePropsEnds(obj, lineOnly, pts, errors) Then Return pts
+        Else
+            errors.Add("UF_EVAL/curve_props: 곡선 형식 아님 → 건너뜀")
+        End If
         If TryBoundingBoxEnds(obj, lineOnly, pts, errors) Then Return pts
 
         Diag("  " & obj.GetType().Name & " 끝점 읽기 실패: " & String.Join(" / ", errors))
         pts.Clear()
         Return pts
+    End Function
+
+    ''' <summary>UF 객체 형식이 곡선(UF_EVAL 로 계산 가능한 형식)인지</summary>
+    Private Shared Function IsUfCurveType(ufType As Integer, ufSubtype As Integer) As Boolean
+        Select Case ufType
+            Case UFConstants.UF_line_type, UFConstants.UF_circle_type,
+                 UFConstants.UF_conic_type, UFConstants.UF_spline_type
+                Return True
+            Case UFConstants.UF_solid_type
+                Return ufSubtype = UFConstants.UF_solid_edge_subtype
+            Case Else
+                Return False
+        End Select
     End Function
 
     ''' <summary>
@@ -398,7 +427,10 @@ Friend NotInheritable Class ArrangeDimensionsCommand
     ''' </summary>
     Private Function TryParentEnds(obj As TaggedObject, lineOnly As Boolean, pts As List(Of Point3d),
                                    errors As List(Of String)) As Boolean
-        If Not TypeOf obj Is Drawings.DraftingCurve Then Return False
+        If Not TypeOf obj Is Drawings.DraftingCurve Then
+            errors.Add("parents: DraftingCurve 아님 → 건너뜀")
+            Return False
+        End If
         Try
             Dim count As Integer = 0
             Dim parents As Tag() = Nothing
