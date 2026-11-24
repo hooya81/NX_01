@@ -374,11 +374,15 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         End If
 
         ' DraftingCurve 등: 아래 방법을 차례로 시도 (앞 방법이 실패하면 다음 방법)
+        '   0) 원본 모서리       : DraftingCurve 의 부모(모델 Edge/Line)의 끝점 (모델 좌표)
+        '      DraftingCurve 는 모델 모서리를 뷰에 투영한 객체라 UF_EVAL 등이
+        '      "Cannot extract the curve from edge" 오류를 내므로 가장 먼저 시도
         '   1) UF_EVAL           : 곡선 계산기 (직선 여부 + 양 끝점)
         '   2) UF_MODL 곡선 속성  : 매개변수 0 / 0.5 / 1 위치 (가운데 점으로 직선 여부 확인)
         '   3) UF_MODL 경계 상자  : 상자 대각선 끝점 (수평/수직 직선만 직선으로 인정)
         Dim errors As New List(Of String)()
 
+        If TryParentEnds(obj, lineOnly, pts, errors) Then Return pts
         If TryEvalEnds(obj, lineOnly, pts, errors) Then Return pts
         If TryCurvePropsEnds(obj, lineOnly, pts, errors) Then Return pts
         If TryBoundingBoxEnds(obj, lineOnly, pts, errors) Then Return pts
@@ -386,6 +390,54 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         Diag("  " & obj.GetType().Name & " 끝점 읽기 실패: " & String.Join(" / ", errors))
         pts.Clear()
         Return pts
+    End Function
+
+    ''' <summary>
+    ''' 0) DraftingCurve 의 부모(원본 모델 모서리/곡선)에서 끝점.
+    ''' UF_DRAW_ask_drafting_curve_parents 로 부모를 찾고, 부모가 Edge/Line 이면 그 끝점(모델 좌표) 사용.
+    ''' </summary>
+    Private Function TryParentEnds(obj As TaggedObject, lineOnly As Boolean, pts As List(Of Point3d),
+                                   errors As List(Of String)) As Boolean
+        If Not TypeOf obj Is Drawings.DraftingCurve Then Return False
+        Try
+            Dim count As Integer = 0
+            Dim parents As Tag() = Nothing
+            _uf.Draw.AskDraftingCurveParents(obj.Tag, count, parents)
+            If parents Is Nothing OrElse count = 0 Then
+                errors.Add("parents: 부모 없음")
+                Return False
+            End If
+
+            For i = 0 To count - 1
+                Dim parent As TaggedObject = NXOpen.Utilities.NXObjectManager.Get(parents(i))
+                Dim ln = TryCast(parent, Line)
+                If ln IsNot Nothing Then
+                    pts.Add(ln.StartPoint)
+                    pts.Add(ln.EndPoint)
+                    Diag("  DraftingCurve 끝점: 부모 Line")
+                    Return True
+                End If
+
+                Dim e = TryCast(parent, Edge)
+                If e IsNot Nothing Then
+                    If lineOnly AndAlso e.SolidEdgeType <> Edge.EdgeType.Linear Then Return True ' 직선 아님
+                    Dim v1 As Point3d, v2 As Point3d
+                    e.GetVertices(v1, v2)
+                    pts.Add(v1)
+                    pts.Add(v2)
+                    Diag("  DraftingCurve 끝점: 부모 Edge (" & e.SolidEdgeType.ToString() & ")")
+                    Return True
+                End If
+            Next
+
+            errors.Add("parents: 부모가 Edge/Line 이 아님 (" &
+                       String.Join(",", parents.Take(count).Select(Function(t) NXOpen.Utilities.NXObjectManager.Get(t).GetType().Name)) & ")")
+            Return False
+        Catch ex As Exception
+            errors.Add("parents: " & ex.Message)
+            pts.Clear()
+            Return False
+        End Try
     End Function
 
     ''' <summary>1) UF_EVAL 로 끝점. 성공 시 True (lineOnly 인데 직선이 아니면 빈 목록으로 True).</summary>
