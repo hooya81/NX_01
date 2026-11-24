@@ -216,7 +216,7 @@ Friend NotInheritable Class ArrangeDimensionsCommand
             Next
             If coords.Count < 2 Then Return Nothing
             Return New Double() {coords(0), coords(1)}
-        Catch ex As NXException
+        Catch ex As Exception
             Diag("  치수 Tag=" & CULng(d.Tag) & " 측정점 읽기 오류: " & ex.Message)
             Return Nothing
         Finally
@@ -304,7 +304,7 @@ Friend NotInheritable Class ArrangeDimensionsCommand
                 Case DimensionMeasurementBuilder.MeasurementMethod.Vertical
                     Return StackDirection.AlongX
             End Select
-        Catch ex As NXException
+        Catch ex As Exception
             ' 선형 치수가 아님(반경/각도 등) → 판정 불가
         Finally
             If b IsNot Nothing Then b.Destroy()
@@ -339,7 +339,7 @@ Friend NotInheritable Class ArrangeDimensionsCommand
                 If dir.IsValid Then Return dir
             Next
             Diag("  수직거리 치수 Tag=" & CULng(d.Tag) & ": 연관 객체에서 직선을 찾지 못함")
-        Catch ex As NXException
+        Catch ex As Exception
             Diag("  수직거리 치수 Tag=" & CULng(d.Tag) & " 판정 오류: " & ex.Message)
         Finally
             If b IsNot Nothing Then b.Destroy()
@@ -373,14 +373,31 @@ Friend NotInheritable Class ArrangeDimensionsCommand
             Return pts
         End If
 
-        ' DraftingCurve 등: UF 곡선 계산기로 끝점 계산
+        ' DraftingCurve 등: 아래 방법을 차례로 시도 (앞 방법이 실패하면 다음 방법)
+        '   1) UF_EVAL           : 곡선 계산기 (직선 여부 + 양 끝점)
+        '   2) UF_MODL 곡선 속성  : 매개변수 0 / 0.5 / 1 위치 (가운데 점으로 직선 여부 확인)
+        '   3) UF_MODL 경계 상자  : 상자 대각선 끝점 (수평/수직 직선만 직선으로 인정)
+        Dim errors As New List(Of String)()
+
+        If TryEvalEnds(obj, lineOnly, pts, errors) Then Return pts
+        If TryCurvePropsEnds(obj, lineOnly, pts, errors) Then Return pts
+        If TryBoundingBoxEnds(obj, lineOnly, pts, errors) Then Return pts
+
+        Diag("  " & obj.GetType().Name & " 끝점 읽기 실패: " & String.Join(" / ", errors))
+        pts.Clear()
+        Return pts
+    End Function
+
+    ''' <summary>1) UF_EVAL 로 끝점. 성공 시 True (lineOnly 인데 직선이 아니면 빈 목록으로 True).</summary>
+    Private Function TryEvalEnds(obj As TaggedObject, lineOnly As Boolean, pts As List(Of Point3d),
+                                 errors As List(Of String)) As Boolean
         Dim evaluator As IntPtr = IntPtr.Zero
         Try
             _uf.Eval.Initialize(obj.Tag, evaluator)
 
             Dim isLine As Boolean = False
             _uf.Eval.IsLine(evaluator, isLine)
-            If lineOnly AndAlso Not isLine Then Return pts
+            If lineOnly AndAlso Not isLine Then Return True
 
             Dim limits(1) As Double
             _uf.Eval.AskLimits(evaluator, limits)
@@ -390,13 +407,85 @@ Friend NotInheritable Class ArrangeDimensionsCommand
                 _uf.Eval.Evaluate(evaluator, 0, t, p, deriv)
                 pts.Add(New Point3d(p(0), p(1), p(2)))
             Next
-        Catch ex As NXException
-            Diag("  " & obj.GetType().Name & " 곡선 계산 실패: " & ex.Message)
+            Diag("  " & obj.GetType().Name & " 끝점: UF_EVAL")
+            Return True
+        Catch ex As Exception
+            errors.Add("UF_EVAL: " & ex.Message)
             pts.Clear()
+            Return False
         Finally
-            If evaluator <> IntPtr.Zero Then _uf.Eval.Free(evaluator)
+            Try
+                If evaluator <> IntPtr.Zero Then _uf.Eval.Free(evaluator)
+            Catch
+            End Try
         End Try
-        Return pts
+    End Function
+
+    ''' <summary>2) UF_MODL_ask_curve_props (매개변수 0~1) 로 끝점.</summary>
+    Private Function TryCurvePropsEnds(obj As TaggedObject, lineOnly As Boolean, pts As List(Of Point3d),
+                                       errors As List(Of String)) As Boolean
+        Try
+            Dim sample As New List(Of Point3d)()
+            For Each parm In New Double() {0.0, 0.5, 1.0}
+                Dim p(2) As Double, tangent(2) As Double, pNorm(2) As Double, bNorm(2) As Double
+                Dim torsion As Double, radius As Double
+                _uf.Modl.AskCurveProps(obj.Tag, parm, p, tangent, pNorm, bNorm, torsion, radius)
+                sample.Add(New Point3d(p(0), p(1), p(2)))
+            Next
+
+            If lineOnly AndAlso Not IsCollinear(sample(0), sample(1), sample(2)) Then Return True
+            pts.Add(sample(0))
+            pts.Add(sample(2))
+            Diag("  " & obj.GetType().Name & " 끝점: UF_MODL_ask_curve_props")
+            Return True
+        Catch ex As Exception
+            errors.Add("curve_props: " & ex.Message)
+            pts.Clear()
+            Return False
+        End Try
+    End Function
+
+    ''' <summary>3) UF_MODL_ask_bounding_box 로 끝점 (대각선).</summary>
+    Private Function TryBoundingBoxEnds(obj As TaggedObject, lineOnly As Boolean, pts As List(Of Point3d),
+                                        errors As List(Of String)) As Boolean
+        Try
+            Dim box(5) As Double
+            _uf.Modl.AskBoundingBox(obj.Tag, box)
+
+            If lineOnly Then
+                ' 직선인지 알 수 없으므로, 두 축 폭이 0에 가까운(축에 나란한) 경우만 직선으로 인정
+                Dim zeroAxes As Integer = 0
+                For k = 0 To 2
+                    If Math.Abs(box(k + 3) - box(k)) < 0.000001 Then zeroAxes += 1
+                Next
+                If zeroAxes < 2 Then
+                    errors.Add("bounding_box: 축에 나란하지 않아 직선 방향을 알 수 없음")
+                    Return False
+                End If
+            End If
+
+            pts.Add(New Point3d(box(0), box(1), box(2)))
+            pts.Add(New Point3d(box(3), box(4), box(5)))
+            Diag("  " & obj.GetType().Name & " 끝점: UF_MODL_ask_bounding_box")
+            Return True
+        Catch ex As Exception
+            errors.Add("bounding_box: " & ex.Message)
+            pts.Clear()
+            Return False
+        End Try
+    End Function
+
+    ''' <summary>세 점이 한 직선 위에 있는지 (가운데 점의 벗어난 정도로 판단)</summary>
+    Private Shared Function IsCollinear(a As Point3d, m As Point3d, b As Point3d) As Boolean
+        Dim abx As Double = b.X - a.X, aby As Double = b.Y - a.Y, abz As Double = b.Z - a.Z
+        Dim amx As Double = m.X - a.X, amy As Double = m.Y - a.Y, amz As Double = m.Z - a.Z
+        Dim cx As Double = aby * amz - abz * amy
+        Dim cy As Double = abz * amx - abx * amz
+        Dim cz As Double = abx * amy - aby * amx
+        Dim lenAb As Double = Math.Sqrt(abx * abx + aby * aby + abz * abz)
+        If lenAb < 0.000001 Then Return False
+        ' 가운데 점이 직선에서 벗어난 거리 / 길이 가 0.01% 미만이면 직선
+        Return Math.Sqrt(cx * cx + cy * cy + cz * cz) / lenAb / lenAb < 0.0001
     End Function
 
     ''' <summary>
@@ -418,7 +507,7 @@ Friend NotInheritable Class ArrangeDimensionsCommand
                 _uf.View.MapModelToDrawing(view.Tag, model, sheet)
                 mapped.Add(sheet)
             Next
-        Catch ex As NXException
+        Catch ex As Exception
             Return raw
         End Try
 
@@ -472,7 +561,7 @@ Friend NotInheritable Class ArrangeDimensionsCommand
                  ", 형상 평균 좌표=" & Math.Round(sum / cnt, 3))
             If Math.Abs(diff) < 0.000001 Then Return 0
             Return Math.Sign(diff)
-        Catch ex As NXException
+        Catch ex As Exception
             Diag("  바깥쪽 판정 오류: " & ex.Message)
             Return 0
         Finally
@@ -607,7 +696,7 @@ Friend NotInheritable Class ArrangeDimensionsCommand
     Private Shared Function SafeSize(d As Dimension) As Double
         Try
             Return Math.Abs(d.ComputedSize)
-        Catch ex As NXException
+        Catch ex As Exception
             Return 0.0
         End Try
     End Function
