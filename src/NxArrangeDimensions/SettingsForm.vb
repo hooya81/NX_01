@@ -5,6 +5,7 @@ Imports System.Windows.Forms
 Public NotInheritable Class SettingsForm
     Inherits Form
 
+    Private ReadOnly _auto As RadioButton
     Private ReadOnly _serial As RadioButton
     Private ReadOnly _parallel As RadioButton
     Private ReadOnly _mixed As RadioButton
@@ -16,7 +17,7 @@ Public NotInheritable Class SettingsForm
     Private ReadOnly _axisX As RadioButton
     Private ReadOnly _side As ComboBox
 
-    Private Sub New(initial As ArrangeSettings, targetCount As Integer, askAxis As Boolean)
+    Private Sub New(initial As ArrangeSettings, targetCount As Integer, askAxis As Boolean, autoText As String)
         Text = "Arrange Dimensions"
         FormBorderStyle = FormBorderStyle.FixedDialog
         StartPosition = FormStartPosition.CenterParent
@@ -26,10 +27,10 @@ Public NotInheritable Class SettingsForm
         AutoScaleMode = AutoScaleMode.Font
         ' 기준치수 방향을 판정하지 못한 경우에만 "쌓는 방향" 그룹 표시
         Dim dy As Integer = If(askAxis, 76, 0)
-        ClientSize = New Size(300, 320 + dy)
+        ClientSize = New Size(340, 343 + dy)
 
         Dim info As New Label With {
-            .Text = "정렬 대상 치수: " & targetCount & "개",
+            .Text = "선택 치수: " & targetCount & "개 (1번째 = 기준치수)",
             .Location = New Point(12, 12),
             .AutoSize = True
         }
@@ -38,36 +39,42 @@ Public NotInheritable Class SettingsForm
         Dim modeGroup As New GroupBox With {
             .Text = "배치 형태",
             .Location = New Point(12, 36 + dy),
-            .Size = New Size(276, 92)
+            .Size = New Size(316, 115)
+        }
+        _auto = New RadioButton With {
+            .Text = "자동: " & autoText,
+            .Location = New Point(10, 20),
+            .AutoSize = True,
+            .Checked = (initial.Mode = ArrangeMode.Auto)
         }
         _serial = New RadioButton With {
             .Text = "직렬 (기준치수와 한 줄로)",
-            .Location = New Point(10, 20),
+            .Location = New Point(10, 43),
             .AutoSize = True,
             .Checked = (initial.Mode = ArrangeMode.Serial)
         }
         _parallel = New RadioButton With {
             .Text = "병렬 (한 줄씩 간격으로 쌓기)",
-            .Location = New Point(10, 43),
+            .Location = New Point(10, 66),
             .AutoSize = True,
             .Checked = (initial.Mode = ArrangeMode.Parallel)
         }
         _mixed = New RadioButton With {
             .Text = "혼합 (같은 줄 치수는 묶어서 쌓기)",
-            .Location = New Point(10, 66),
+            .Location = New Point(10, 89),
             .AutoSize = True,
             .Checked = (initial.Mode = ArrangeMode.Mixed)
         }
-        modeGroup.Controls.AddRange(New Control() {_serial, _parallel, _mixed})
+        modeGroup.Controls.AddRange(New Control() {_auto, _serial, _parallel, _mixed})
 
         ' 간격
         Dim spacingLabel As New Label With {
             .Text = "치수 간격:",
-            .Location = New Point(12, 141 + dy),
+            .Location = New Point(12, 164 + dy),
             .AutoSize = True
         }
         _spacing = New NumericUpDown With {
-            .Location = New Point(110, 138 + dy),
+            .Location = New Point(110, 161 + dy),
             .Width = 100,
             .DecimalPlaces = 2,
             .Minimum = 0.01D,
@@ -79,12 +86,12 @@ Public NotInheritable Class SettingsForm
         ' 쌓는 쪽 (병렬)
         Dim sideLabel As New Label With {
             .Text = "쌓는 쪽:",
-            .Location = New Point(12, 171 + dy),
+            .Location = New Point(12, 194 + dy),
             .AutoSize = True
         }
         _side = New ComboBox With {
-            .Location = New Point(110, 168 + dy),
-            .Width = 178,
+            .Location = New Point(110, 191 + dy),
+            .Width = 218,
             .DropDownStyle = ComboBoxStyle.DropDownList
         }
         _side.Items.AddRange(New Object() {"자동 (형상 바깥쪽)", "위 / 오른쪽 (+)", "아래 / 왼쪽 (-)"})
@@ -93,8 +100,8 @@ Public NotInheritable Class SettingsForm
         ' 쌓는 순서
         _orderGroup = New GroupBox With {
             .Text = "쌓는 순서",
-            .Location = New Point(12, 198 + dy),
-            .Size = New Size(276, 70)
+            .Location = New Point(12, 221 + dy),
+            .Size = New Size(316, 70)
         }
         _bySize = New RadioButton With {
             .Text = "치수값 작은 것 안쪽",
@@ -110,8 +117,8 @@ Public NotInheritable Class SettingsForm
         }
         _orderGroup.Controls.AddRange(New Control() {_bySize, _keepCurrent})
 
-        Dim ok As New Button With {.Text = "확인", .DialogResult = DialogResult.OK, .Location = New Point(132, 282 + dy), .Width = 75}
-        Dim cancel As New Button With {.Text = "취소", .DialogResult = DialogResult.Cancel, .Location = New Point(213, 282 + dy), .Width = 75}
+        Dim ok As New Button With {.Text = "확인", .DialogResult = DialogResult.OK, .Location = New Point(172, 305 + dy), .Width = 75}
+        Dim cancel As New Button With {.Text = "취소", .DialogResult = DialogResult.Cancel, .Location = New Point(253, 305 + dy), .Width = 75}
         AcceptButton = ok
         CancelButton = cancel
 
@@ -134,13 +141,14 @@ Public NotInheritable Class SettingsForm
             Dim axisGroup As New GroupBox With {
                 .Text = "쌓는 방향 (기준치수 방향을 판정하지 못함)",
                 .Location = New Point(12, 36),
-                .Size = New Size(276, 70)
+                .Size = New Size(316, 70)
             }
             axisGroup.Controls.AddRange(New Control() {_axisY, _axisX})
             Controls.Add(axisGroup)
         End If
 
         ' 직렬은 간격/순서가 필요 없으므로 비활성화
+        AddHandler _auto.CheckedChanged, AddressOf SyncEnabled
         AddHandler _serial.CheckedChanged, AddressOf SyncEnabled
         AddHandler _parallel.CheckedChanged, AddressOf SyncEnabled
         AddHandler _mixed.CheckedChanged, AddressOf SyncEnabled
@@ -151,13 +159,15 @@ Public NotInheritable Class SettingsForm
         Dim stacked As Boolean = Not _serial.Checked
         _spacing.Enabled = stacked
         _orderGroup.Enabled = stacked
-        _side.Enabled = _parallel.Checked ' 쌓는 쪽은 병렬에서만 사용 (혼합은 현재 쪽 유지)
+        _side.Enabled = _parallel.Checked OrElse _auto.Checked ' 쌓는 쪽은 병렬(자동 판정 병렬 포함)에서만 사용
     End Sub
 
     ''' <summary>대화상자를 띄우고 입력값을 반환. 취소 시 Nothing.</summary>
     ''' <param name="askAxis">True면 "쌓는 방향" 선택을 표시 (기준치수 방향을 판정하지 못한 경우)</param>
-    Public Shared Function Ask(initial As ArrangeSettings, targetCount As Integer, askAxis As Boolean) As ArrangeSettings
-        Using form As New SettingsForm(initial, targetCount, askAxis)
+    ''' <param name="autoText">자동 판정 결과 설명 (예: "병렬 (1·2번째 시작점 같음)")</param>
+    Public Shared Function Ask(initial As ArrangeSettings, targetCount As Integer, askAxis As Boolean,
+                               autoText As String) As ArrangeSettings
+        Using form As New SettingsForm(initial, targetCount, askAxis, autoText)
             Try
                 ' NX 메인 창을 부모로 지정 (NX 뒤로 숨는 문제 방지)
                 NXOpenUI.FormUtilities.SetApplicationIcon(form)
@@ -169,7 +179,9 @@ Public NotInheritable Class SettingsForm
             If form.ShowDialog() <> DialogResult.OK Then Return Nothing
 
             Dim mode As ArrangeMode
-            If form._serial.Checked Then
+            If form._auto.Checked Then
+                mode = ArrangeMode.Auto
+            ElseIf form._serial.Checked Then
                 mode = ArrangeMode.Serial
             ElseIf form._mixed.Checked Then
                 mode = ArrangeMode.Mixed

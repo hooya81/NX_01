@@ -10,7 +10,8 @@ Public Enum StackAxis
 End Enum
 
 ''' <summary>
-''' 기준치수 선택 → 정렬할 치수 선택 → 형태(직렬/병렬/혼합)·간격 입력 → 기준치수 기준으로 배치.
+''' 치수 여러 개 선택(1번째 = 기준치수) → 형태 자동 판정 → 간격 등 입력 → 기준치수 기준으로 배치.
+''' 형태 자동 판정: 1번째와 2번째 치수의 측정 시작점이 같으면 병렬, 다르면 직렬.
 ''' 쌓는 방향 판정:
 '''   수평/수직 치수 → 형식 또는 측정 방법으로 판정
 '''   수직거리(Perpendicular) 치수 → 기준선의 시트상 방향 (기울어진 선이면 그 각도로 쌓음)
@@ -19,6 +20,9 @@ End Enum
 Friend NotInheritable Class ArrangeDimensionsCommand
 
     Private Const Title As String = "Arrange Dimensions"
+
+    ''' <summary>시작점이 "같다"고 보는 허용 거리 (시트 좌표)</summary>
+    Private Const StartTolerance As Double = 0.05
 
     Private ReadOnly _session As Session
     Private ReadOnly _ui As UI
@@ -41,52 +45,97 @@ Friend NotInheritable Class ArrangeDimensionsCommand
             Return
         End If
 
-        ' 1) 기준치수 선택
-        Dim refDim As Dimension = SelectReferenceDimension()
-        If refDim Is Nothing Then Return
+        ' 1) 치수 여러 개 선택 (선택 순서 유지, 1번째 = 기준치수)
+        Dim selected As List(Of Dimension) = SelectDimensions()
+        If selected Is Nothing Then Return
+        If selected.Count < 2 Then
+            ShowError("치수를 2개 이상 선택하세요. (1번째 선택한 치수가 기준치수)")
+            Return
+        End If
+
+        Dim refDim As Dimension = selected(0)
+        Dim others As List(Of Dimension) = selected.Skip(1).ToList()
 
         ' 방향을 판정하지 못해도 진행: 입력 창에서 사용자가 방향을 고름
         Dim refDir As StackDirection = GetStackDirection(refDim)
 
         refDim.Highlight()
         Try
-            ' 2) 정렬할 치수 선택
-            Dim selected As List(Of Dimension) = SelectTargetDimensions(refDim)
-            If selected Is Nothing OrElse selected.Count = 0 Then Return
+            ' 2) 방향을 알면 미리 대상 치수를 거르고 형태를 자동 판정해 입력 창에 표시
+            Dim targets As List(Of Dimension) = Nothing
+            Dim skipped As Integer = 0
+            Dim autoMode As ArrangeMode = ArrangeMode.Auto ' Auto = 판정 불가
+            Dim autoReason As String = "방향 선택 후 판정"
+            If refDir.IsValid Then
+                targets = FilterTargets(others, refDir, skipped)
+                If targets.Count > 0 Then autoMode = DetectAutoMode(refDim, targets(0), refDir, autoReason)
+            End If
 
-            ' 3) 형태/간격/순서(+ 필요 시 방향) 입력
-            Dim settings As ArrangeSettings = SettingsForm.Ask(ArrangeSettings.Load(), selected.Count, Not refDir.IsValid)
+            ' 3) 형태/간격/쌓는 쪽/순서(+ 필요 시 방향) 입력
+            Dim settings As ArrangeSettings = SettingsForm.Ask(ArrangeSettings.Load(), selected.Count,
+                                                               Not refDir.IsValid, AutoText(autoMode, autoReason))
             If settings Is Nothing Then Return
             settings.Save()
 
             Dim dir As StackDirection = If(refDir.IsValid, refDir, StackDirection.FromAxis(settings.Axis))
 
-            ' 4) 방향이 확실히 다른 치수만 제외. 판정 불가 치수는 사용자가 고른 것이므로 포함.
-            Dim targets As New List(Of Dimension)()
-            Dim skipped As Integer = 0
-            For Each d In selected
-                Dim td As StackDirection = GetStackDirection(d)
-                If Not td.IsValid OrElse td.IsParallelTo(dir) Then
-                    targets.Add(d)
-                Else
-                    skipped += 1
-                End If
-            Next
+            ' 4) 방향을 입력 창에서 고른 경우 이제 거르고 판정
+            If targets Is Nothing Then
+                targets = FilterTargets(others, dir, skipped)
+                If targets.Count > 0 Then autoMode = DetectAutoMode(refDim, targets(0), dir, autoReason)
+            End If
 
             If targets.Count = 0 Then
-                ShowError("기준치수와 같은 방향의 치수가 선택되지 않았습니다.")
+                ShowError("기준치수(1번째)와 같은 방향의 치수가 선택되지 않았습니다.")
                 Return
             End If
             If skipped > 0 Then
                 ShowInfo("방향이 다른 치수 " & skipped & "개는 제외됩니다.")
             End If
 
-            ' 5) 배치 계산 및 적용
-            Apply(refDim, refDir, targets, dir, settings)
+            ' 5) 형태 결정
+            Dim mode As ArrangeMode = settings.Mode
+            Dim modeReason As String = "사용자 지정"
+            If mode = ArrangeMode.Auto Then
+                If autoMode = ArrangeMode.Auto Then
+                    mode = ArrangeMode.Parallel
+                    modeReason = "자동 판정 불가(" & autoReason & ") → 병렬"
+                    ShowInfo("1·2번째 치수의 시작점을 읽지 못해 병렬로 정렬합니다." & vbLf & autoReason)
+                Else
+                    mode = autoMode
+                    modeReason = "자동: " & autoReason
+                End If
+            End If
+
+            ' 6) 배치 계산 및 적용
+            Apply(refDim, refDir, targets, dir, settings, mode, modeReason)
         Finally
             refDim.Unhighlight()
         End Try
     End Sub
+
+    ''' <summary>방향이 확실히 다른 치수만 제외. 판정 불가 치수는 사용자가 고른 것이므로 포함.</summary>
+    Private Function FilterTargets(others As List(Of Dimension), dir As StackDirection, ByRef skipped As Integer) As List(Of Dimension)
+        Dim targets As New List(Of Dimension)()
+        skipped = 0
+        For Each d In others
+            Dim td As StackDirection = GetStackDirection(d)
+            If Not td.IsValid OrElse td.IsParallelTo(dir) Then
+                targets.Add(d)
+            Else
+                skipped += 1
+            End If
+        Next
+        Return targets
+    End Function
+
+    Private Shared Function AutoText(autoMode As ArrangeMode, reason As String) As String
+        Select Case autoMode
+            Case ArrangeMode.Parallel : Return "병렬 (" & reason & ")"
+            Case ArrangeMode.Serial : Return "직렬 (" & reason & ")"
+            Case Else : Return "판정 불가 → 병렬 (" & reason & ")"
+        End Select
+    End Function
 
     ' ---------------------------------------------------------------- 선택
 
@@ -94,37 +143,12 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         Return New Selection.MaskTriple() {New Selection.MaskTriple(UFConstants.UF_dimension_type, 0, 0)}
     End Function
 
-    Private Function SelectReferenceDimension() As Dimension
-        Do
-            Dim obj As TaggedObject = Nothing
-            Dim cursor As Point3d
-            Dim resp As Selection.Response = _ui.SelectionManager.SelectTaggedObject(
-                "기준치수를 선택하세요",
-                Title & " - 기준치수",
-                Selection.SelectionScope.WorkPart,
-                Selection.SelectionAction.ClearAndEnableSpecific,
-                False, False,
-                DimensionMask(),
-                obj, cursor)
-
-            If resp <> Selection.Response.ObjectSelected AndAlso
-               resp <> Selection.Response.ObjectSelectedByName Then
-                Return Nothing ' 취소/뒤로
-            End If
-
-            Dim d = TryCast(obj, Dimension)
-            If d IsNot Nothing Then Return d
-
-            ShowError("치수를 선택하세요.")
-        Loop
-    End Function
-
-    ''' <summary>정렬할 치수 선택. 기준치수와 치수가 아닌 객체만 걸러내고 방향 필터는 나중에 적용.</summary>
-    Private Function SelectTargetDimensions(refDim As Dimension) As List(Of Dimension)
+    ''' <summary>치수 여러 개 선택. 선택 순서를 유지하고 중복/치수가 아닌 객체는 제외.</summary>
+    Private Function SelectDimensions() As List(Of Dimension)
         Dim objs As TaggedObject() = Nothing
         Dim resp As Selection.Response = _ui.SelectionManager.SelectTaggedObjects(
-            "정렬할 치수를 선택하세요 (기준치수와 같은 방향)",
-            Title & " - 정렬 대상",
+            "정렬할 치수를 순서대로 선택하세요 (1번째 = 기준치수)",
+            Title,
             Selection.SelectionScope.WorkPart,
             Selection.SelectionAction.ClearAndEnableSpecific,
             False, False,
@@ -136,17 +160,98 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         End If
 
         Dim result As New List(Of Dimension)()
+        Dim seen As New HashSet(Of Tag)()
         For Each o In objs
             Dim d = TryCast(o, Dimension)
-            If d Is Nothing OrElse d.Tag = refDim.Tag Then Continue For
+            If d Is Nothing OrElse Not seen.Add(d.Tag) Then Continue For
             result.Add(d)
         Next
-
-        If result.Count = 0 Then
-            ShowError("정렬할 치수가 선택되지 않았습니다.")
-            Return Nothing
-        End If
         Return result
+    End Function
+
+    ' ---------------------------------------------------------------- 형태 자동 판정
+
+    ''' <summary>
+    ''' 1번째(기준)와 2번째 치수의 측정 구간을 비교해 병렬/직렬 판정.
+    ''' 판정 불가 시 ArrangeMode.Auto 반환.
+    ''' </summary>
+    Private Function DetectAutoMode(first As Dimension, second As Dimension, dir As StackDirection,
+                                    ByRef reason As String) As ArrangeMode
+        Dim a As Double() = MeasuredInterval(first, dir)
+        Dim b As Double() = MeasuredInterval(second, dir)
+        If a Is Nothing OrElse b Is Nothing Then
+            reason = If(a Is Nothing, "1번째", "2번째") & " 치수의 측정점을 읽지 못함"
+            Diag("  형태 판정: " & reason)
+            Return ArrangeMode.Auto
+        End If
+
+        Dim mode As ArrangeMode = DimensionLayout.DetectMode(a(0), a(1), b(0), b(1), StartTolerance)
+        reason = If(mode = ArrangeMode.Parallel, "1·2번째 시작점 같음", "1·2번째 시작점 다름")
+        Diag("  형태 판정: 1번째 구간=[" & Math.Round(Math.Min(a(0), a(1)), 3) & ", " & Math.Round(Math.Max(a(0), a(1)), 3) &
+             "], 2번째 구간=[" & Math.Round(Math.Min(b(0), b(1)), 3) & ", " & Math.Round(Math.Max(b(0), b(1)), 3) &
+             "] → " & mode.ToString())
+        Return mode
+    End Function
+
+    ''' <summary>
+    ''' 치수가 측정하는 두 점의 치수선 방향 좌표 (시트 기준). 읽지 못하면 Nothing.
+    ''' 치수선 방향 = 쌓는 방향에 수직 (수평 치수면 X, 수직 치수면 Y).
+    ''' </summary>
+    Private Function MeasuredInterval(d As Dimension, dir As StackDirection) As Double()
+        Dim b As LinearDimensionBuilder = Nothing
+        Try
+            ' 읽기만 하고 Commit 하지 않음
+            b = _workPart.Dimensions.CreateLinearDimensionBuilder(d)
+            Dim coords As New List(Of Double)()
+            For Each sel As SelectNXObject In New SelectNXObject() {b.FirstAssociativity, b.SecondAssociativity}
+                If sel Is Nothing Then Continue For
+
+                Dim obj As TaggedObject = Nothing
+                Dim view As View = Nothing
+                Dim pick As Point3d
+                sel.GetValue(obj, view, pick)
+
+                Dim p As Double() = MeasuredPoint(obj, view, pick, d.AnnotationOrigin)
+                If p IsNot Nothing Then coords.Add(p(0) * dir.Y - p(1) * dir.X)
+            Next
+            If coords.Count < 2 Then Return Nothing
+            Return New Double() {coords(0), coords(1)}
+        Catch ex As NXException
+            Diag("  치수 Tag=" & CULng(d.Tag) & " 측정점 읽기 오류: " & ex.Message)
+            Return Nothing
+        Finally
+            If b IsNot Nothing Then b.Destroy()
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' 연관 객체 하나에서 치수가 측정하는 점 (시트 좌표).
+    ''' 점이면 그 좌표, 곡선/모서리면 선택 위치(pick)에 가장 가까운 끝점, 그 밖에는 선택 위치.
+    ''' </summary>
+    Private Function MeasuredPoint(obj As TaggedObject, view As View, pick As Point3d, near As Point3d) As Double()
+        If obj Is Nothing Then Return Nothing
+
+        Dim pt = TryCast(obj, Point)
+        If pt IsNot Nothing Then
+            Return ToSheetPoints(obj, New List(Of Point3d) From {pt.Coordinates}, view, near)(0)
+        End If
+
+        ' 선택 위치는 모델/시트 어느 좌표인지 확실하지 않으므로 치수에 가까운 해석 사용
+        Dim pickSheet As Double() = ToSheetPoints(obj, New List(Of Point3d) From {pick}, view, near, False)(0)
+
+        Dim ends As List(Of Point3d) = CurveEndPoints(obj, False)
+        If ends.Count = 0 Then Return pickSheet
+
+        Dim best As Double() = Nothing
+        Dim bestDist As Double = Double.MaxValue
+        For Each e In ToSheetPoints(obj, ends, view, near)
+            Dim dist As Double = Math.Sqrt((e(0) - pickSheet(0)) ^ 2 + (e(1) - pickSheet(1)) ^ 2)
+            If dist < bestDist Then
+                bestDist = dist
+                best = e
+            End If
+        Next
+        Return best
     End Function
 
     ' ---------------------------------------------------------------- 방향 판정
@@ -300,7 +405,8 @@ Friend NotInheritable Class ArrangeDimensionsCommand
     ''' Edge 는 항상 모델 좌표 → 변환. 그 밖의 객체는 두 해석 중 치수(near)에 더 가까운 쪽을 사용.
     ''' </summary>
     Private Function ToSheetPoints(obj As TaggedObject, pts As List(Of Point3d), view As View,
-                                   near As Point3d) As List(Of Double())
+                                   near As Point3d,
+                                   Optional edgeIsModel As Boolean = True) As List(Of Double())
         Dim raw As List(Of Double()) = pts.Select(Function(p) New Double() {p.X, p.Y}).ToList()
         If Not TypeOf view Is Drawings.DraftingView Then Return raw
 
@@ -316,7 +422,7 @@ Friend NotInheritable Class ArrangeDimensionsCommand
             Return raw
         End Try
 
-        If TypeOf obj Is Edge Then Return mapped
+        If edgeIsModel AndAlso TypeOf obj Is Edge Then Return mapped
 
         Dim dRaw As Double = DistToCentroid(raw, near)
         Dim dMapped As Double = DistToCentroid(mapped, near)
@@ -409,7 +515,8 @@ Friend NotInheritable Class ArrangeDimensionsCommand
     Private Const DebugLog As Boolean = True
 
     Private Sub Apply(refDim As Dimension, refDir As StackDirection, targets As List(Of Dimension),
-                      dir As StackDirection, settings As ArrangeSettings)
+                      dir As StackDirection, settings As ArrangeSettings,
+                      mode As ArrangeMode, modeReason As String)
         Dim refCoord As Double = Coord(refDim.AnnotationOrigin, dir)
 
         Dim items As New List(Of LayoutItem)(targets.Count)
@@ -421,7 +528,7 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         ' 병렬: 모든 치수를 한쪽(형상 바깥쪽)으로 쌓음
         Dim side As Integer = 0
         Dim sideReason As String = "현재 쪽 유지"
-        If settings.Mode = ArrangeMode.Parallel Then
+        If mode = ArrangeMode.Parallel Then
             If settings.Side <> 0 Then
                 side = Math.Sign(settings.Side)
                 sideReason = "사용자 지정"
@@ -437,14 +544,14 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         End If
 
         Dim newOffsets As IDictionary(Of Integer, Double) =
-            DimensionLayout.Compute(items, settings.Mode, settings.Spacing, settings.Order, settings.RowTolerance, side)
+            DimensionLayout.Compute(items, mode, settings.Spacing, settings.Order, settings.RowTolerance, side)
 
         Dim log As ListingWindow = Nothing
         If DebugLog Then
             log = _session.ListingWindow
             log.Open()
             log.WriteLine("=== " & Title & " ===")
-            log.WriteLine("형태=" & settings.Mode.ToString() & ", 간격=" & settings.Spacing &
+            log.WriteLine("형태=" & mode.ToString() & " (" & modeReason & "), 간격=" & settings.Spacing &
                           ", 순서=" & settings.Order.ToString() & ", 쌓는방향=" & dir.ToString())
             log.WriteLine("기준치수 Tag=" & CULng(refDim.Tag) & ", 유형=" & refDim.GetType().Name &
                           ", 판정=" & refDir.ToString() & ", 기준좌표=" & refCoord)

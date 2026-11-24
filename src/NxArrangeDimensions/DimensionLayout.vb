@@ -10,6 +10,9 @@ Public Enum ArrangeMode
 
     ''' <summary>혼합: 이미 같은 줄에 있는 치수(체인)는 묶어서 쌓음</summary>
     Mixed = 2
+
+    ''' <summary>자동: 1번째와 2번째 치수의 시작점이 같으면 병렬, 다르면 직렬 (실행 시 Serial/Parallel 로 결정)</summary>
+    Auto = 3
 End Enum
 
 ''' <summary>쌓는 순서</summary>
@@ -61,6 +64,7 @@ Public Module DimensionLayout
         If items Is Nothing Then Throw New ArgumentNullException(NameOf(items))
         If spacing <= 0 Then Throw New ArgumentOutOfRangeException(NameOf(spacing), "간격은 0보다 커야 합니다.")
         If rowTolerance < 0 Then Throw New ArgumentOutOfRangeException(NameOf(rowTolerance))
+        If mode = ArrangeMode.Auto Then Throw New ArgumentException("Auto 는 DetectMode 로 Serial/Parallel 을 정한 뒤 호출하세요.", NameOf(mode))
 
         ' 위치 값이 NaN/무한대인 항목은 비교식에서 모두 빠져 결과가 누락되므로 0(기준 줄)으로 취급
         Dim list = items.Select(Function(i) If(Double.IsNaN(i.Offset) OrElse Double.IsInfinity(i.Offset),
@@ -98,6 +102,22 @@ Public Module DimensionLayout
         End If
 
         Return result
+    End Function
+
+    ''' <summary>
+    ''' 자동 형태 판정: 두 치수의 측정 구간(치수선 방향 좌표)을 비교.
+    ''' 시작점이 같으면(구간의 한쪽 끝이 일치 = 공통 기준에서 시작) 병렬, 다르면 직렬.
+    ''' 구간 끝점 순서는 상관없음 (작은 값/큰 값 각각 비교).
+    ''' </summary>
+    Public Function DetectMode(firstA As Double, firstB As Double,
+                               secondA As Double, secondB As Double,
+                               tolerance As Double) As ArrangeMode
+        Dim lo1 As Double = Math.Min(firstA, firstB), hi1 As Double = Math.Max(firstA, firstB)
+        Dim lo2 As Double = Math.Min(secondA, secondB), hi2 As Double = Math.Max(secondA, secondB)
+        If Math.Abs(lo1 - lo2) <= tolerance OrElse Math.Abs(hi1 - hi2) <= tolerance Then
+            Return ArrangeMode.Parallel
+        End If
+        Return ArrangeMode.Serial
     End Function
 
     Private Sub ArrangeSide(side As IEnumerable(Of LayoutItem), sign As Integer, spacing As Double,

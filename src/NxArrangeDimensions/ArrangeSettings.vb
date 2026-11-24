@@ -5,7 +5,7 @@ Imports System.IO
 Public NotInheritable Class ArrangeSettings
 
     Public Property Spacing As Double = 10.0
-    Public Property Mode As ArrangeMode = ArrangeMode.Parallel
+    Public Property Mode As ArrangeMode = ArrangeMode.Auto
     Public Property Order As ArrangeOrder = ArrangeOrder.BySizeAscending
 
     ''' <summary>병렬일 때 쌓는 쪽: 0 = 자동(형상 바깥쪽), +1 = 위/오른쪽, -1 = 아래/왼쪽</summary>
