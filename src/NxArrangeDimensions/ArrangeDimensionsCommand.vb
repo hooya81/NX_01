@@ -349,7 +349,7 @@ Friend NotInheritable Class ArrangeDimensionsCommand
 
     ''' <summary>
     ''' 곡선형 객체의 양 끝점.
-    ''' Line / Edge 는 NXOpen 속성으로, 그 밖의 곡선(DraftingCurve 등)은 UF_EVAL 로 계산.
+    ''' Line / Edge 는 NXOpen 속성으로, 그 밖의 곡선(DraftingCurve 등)은 부모 모서리 → UF_EVAL → 곡선 속성 → 경계 상자 순으로 시도.
     ''' lineOnly = True 이면 직선일 때만 반환 (직선이 아니면 빈 목록).
     ''' </summary>
     Private Function CurveEndPoints(obj As TaggedObject, lineOnly As Boolean) As List(Of Point3d)
