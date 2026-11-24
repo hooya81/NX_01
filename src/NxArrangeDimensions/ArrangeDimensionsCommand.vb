@@ -269,6 +269,71 @@ Friend NotInheritable Class ArrangeDimensionsCommand
         Return New Double() {p.X, p.Y}
     End Function
 
+    ''' <summary>
+    ''' 형상 바깥쪽 판정: 기준치수가 측정하는 형상(연관 객체)의 위치보다 치수가 어느 쪽에 있는지.
+    ''' +1 = 쌓는 방향 + 쪽이 바깥, -1 = - 쪽이 바깥, 0 = 판정 불가.
+    ''' </summary>
+    Private Function DetectOutwardSign(refDim As Dimension, dir As StackDirection) As Integer
+        Dim b As LinearDimensionBuilder = Nothing
+        Try
+            ' 읽기만 하고 Commit 하지 않음
+            b = _workPart.Dimensions.CreateLinearDimensionBuilder(refDim)
+            Dim sum As Double = 0
+            Dim cnt As Integer = 0
+            For Each sel As SelectNXObject In New SelectNXObject() {b.FirstAssociativity, b.SecondAssociativity}
+                If sel Is Nothing Then Continue For
+
+                Dim obj As TaggedObject = Nothing
+                Dim view As View = Nothing
+                Dim pick As Point3d
+                sel.GetValue(obj, view, pick)
+
+                For Each gp In GeometryPoints(obj)
+                    Dim sp As Double() = ToSheet(gp, view)
+                    sum += dir.CoordOf(sp(0), sp(1))
+                    cnt += 1
+                Next
+            Next
+            If cnt = 0 Then Return 0
+
+            Dim diff As Double = Coord(refDim.AnnotationOrigin, dir) - sum / cnt
+            If Math.Abs(diff) < 0.000001 Then Return 0
+            Return Math.Sign(diff)
+        Catch ex As NXException
+            Return 0
+        Finally
+            If b IsNot Nothing Then b.Destroy()
+        End Try
+    End Function
+
+    ''' <summary>연관 객체의 대표 점들 (모서리/선의 양 끝점, 점 좌표). 모르는 객체는 빈 목록.</summary>
+    Private Shared Function GeometryPoints(obj As TaggedObject) As List(Of Point3d)
+        Dim pts As New List(Of Point3d)()
+
+        Dim ln = TryCast(obj, Line)
+        If ln IsNot Nothing Then
+            pts.Add(ln.StartPoint)
+            pts.Add(ln.EndPoint)
+            Return pts
+        End If
+
+        Dim e = TryCast(obj, Edge)
+        If e IsNot Nothing Then
+            Dim v1 As Point3d, v2 As Point3d
+            e.GetVertices(v1, v2)
+            pts.Add(v1)
+            pts.Add(v2)
+            Return pts
+        End If
+
+        Dim pt = TryCast(obj, Point)
+        If pt IsNot Nothing Then
+            pts.Add(pt.Coordinates)
+        End If
+
+        Return pts
+    End Function
+
     ' ---------------------------------------------------------------- 적용
 
     ''' <summary>True면 치수별 계산/이동 내역을 정보 창(Listing Window)에 출력 (문제 확인용)</summary>
@@ -284,8 +349,26 @@ Friend NotInheritable Class ArrangeDimensionsCommand
             items.Add(New LayoutItem(i, Coord(o, dir) - refCoord, SafeSize(targets(i))))
         Next
 
+        ' 병렬: 모든 치수를 한쪽(형상 바깥쪽)으로 쌓음
+        Dim side As Integer = 0
+        Dim sideReason As String = "현재 쪽 유지"
+        If settings.Mode = ArrangeMode.Parallel Then
+            If settings.Side <> 0 Then
+                side = Math.Sign(settings.Side)
+                sideReason = "사용자 지정"
+            Else
+                side = DetectOutwardSign(refDim, dir)
+                sideReason = "형상 바깥쪽 자동"
+                If side = 0 Then
+                    ' 형상 위치를 못 읽으면 대상 치수가 더 많이 있는 쪽 (동수면 +)
+                    side = If(items.Sum(Function(x) Math.Sign(x.Offset)) < 0, -1, 1)
+                    sideReason = "형상 위치 판정 불가 → 대상 치수가 많은 쪽"
+                End If
+            End If
+        End If
+
         Dim newOffsets As IDictionary(Of Integer, Double) =
-            DimensionLayout.Compute(items, settings.Mode, settings.Spacing, settings.Order, settings.RowTolerance)
+            DimensionLayout.Compute(items, settings.Mode, settings.Spacing, settings.Order, settings.RowTolerance, side)
 
         Dim log As ListingWindow = Nothing
         If DebugLog Then
@@ -296,6 +379,7 @@ Friend NotInheritable Class ArrangeDimensionsCommand
                           ", 순서=" & settings.Order.ToString() & ", 쌓는방향=" & dir.ToString())
             log.WriteLine("기준치수 Tag=" & CULng(refDim.Tag) & ", 유형=" & refDim.GetType().Name &
                           ", 판정=" & refDir.ToString() & ", 기준좌표=" & refCoord)
+            log.WriteLine("쌓는 쪽=" & If(side > 0, "+", If(side < 0, "-", "각자")) & " (" & sideReason & ")")
             log.WriteLine("대상 " & targets.Count & "개 / 계산결과 " & newOffsets.Count & "개")
         End If
 

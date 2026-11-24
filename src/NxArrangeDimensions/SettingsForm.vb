@@ -14,6 +14,7 @@ Public NotInheritable Class SettingsForm
     Private ReadOnly _keepCurrent As RadioButton
     Private ReadOnly _axisY As RadioButton
     Private ReadOnly _axisX As RadioButton
+    Private ReadOnly _side As ComboBox
 
     Private Sub New(initial As ArrangeSettings, targetCount As Integer, askAxis As Boolean)
         Text = "Arrange Dimensions"
@@ -25,7 +26,7 @@ Public NotInheritable Class SettingsForm
         AutoScaleMode = AutoScaleMode.Font
         ' 기준치수 방향을 판정하지 못한 경우에만 "쌓는 방향" 그룹 표시
         Dim dy As Integer = If(askAxis, 76, 0)
-        ClientSize = New Size(300, 290 + dy)
+        ClientSize = New Size(300, 320 + dy)
 
         Dim info As New Label With {
             .Text = "정렬 대상 치수: " & targetCount & "개",
@@ -75,10 +76,24 @@ Public NotInheritable Class SettingsForm
             .Value = CDec(Math.Max(0.01, Math.Min(10000, initial.Spacing)))
         }
 
+        ' 쌓는 쪽 (병렬)
+        Dim sideLabel As New Label With {
+            .Text = "쌓는 쪽:",
+            .Location = New Point(12, 171 + dy),
+            .AutoSize = True
+        }
+        _side = New ComboBox With {
+            .Location = New Point(110, 168 + dy),
+            .Width = 178,
+            .DropDownStyle = ComboBoxStyle.DropDownList
+        }
+        _side.Items.AddRange(New Object() {"자동 (형상 바깥쪽)", "위 / 오른쪽 (+)", "아래 / 왼쪽 (-)"})
+        _side.SelectedIndex = If(initial.Side > 0, 1, If(initial.Side < 0, 2, 0))
+
         ' 쌓는 순서
         _orderGroup = New GroupBox With {
             .Text = "쌓는 순서",
-            .Location = New Point(12, 168 + dy),
+            .Location = New Point(12, 198 + dy),
             .Size = New Size(276, 70)
         }
         _bySize = New RadioButton With {
@@ -95,12 +110,12 @@ Public NotInheritable Class SettingsForm
         }
         _orderGroup.Controls.AddRange(New Control() {_bySize, _keepCurrent})
 
-        Dim ok As New Button With {.Text = "확인", .DialogResult = DialogResult.OK, .Location = New Point(132, 252 + dy), .Width = 75}
-        Dim cancel As New Button With {.Text = "취소", .DialogResult = DialogResult.Cancel, .Location = New Point(213, 252 + dy), .Width = 75}
+        Dim ok As New Button With {.Text = "확인", .DialogResult = DialogResult.OK, .Location = New Point(132, 282 + dy), .Width = 75}
+        Dim cancel As New Button With {.Text = "취소", .DialogResult = DialogResult.Cancel, .Location = New Point(213, 282 + dy), .Width = 75}
         AcceptButton = ok
         CancelButton = cancel
 
-        Controls.AddRange(New Control() {info, modeGroup, spacingLabel, _spacing, _orderGroup, ok, cancel})
+        Controls.AddRange(New Control() {info, modeGroup, spacingLabel, _spacing, sideLabel, _side, _orderGroup, ok, cancel})
 
         ' 쌓는 방향 (기준치수 유형으로 방향을 알 수 없을 때)
         _axisY = New RadioButton With {
@@ -136,6 +151,7 @@ Public NotInheritable Class SettingsForm
         Dim stacked As Boolean = Not _serial.Checked
         _spacing.Enabled = stacked
         _orderGroup.Enabled = stacked
+        _side.Enabled = _parallel.Checked ' 쌓는 쪽은 병렬에서만 사용 (혼합은 현재 쪽 유지)
     End Sub
 
     ''' <summary>대화상자를 띄우고 입력값을 반환. 취소 시 Nothing.</summary>
@@ -165,6 +181,7 @@ Public NotInheritable Class SettingsForm
                 .Mode = mode,
                 .Spacing = CDbl(form._spacing.Value),
                 .Order = If(form._keepCurrent.Checked, ArrangeOrder.KeepCurrent, ArrangeOrder.BySizeAscending),
+                .Side = If(form._side.SelectedIndex = 1, 1, If(form._side.SelectedIndex = 2, -1, 0)),
                 .Axis = If(Not askAxis, initial.Axis,
                            If(form._axisX.Checked, StackAxis.X, StackAxis.Y))
             }

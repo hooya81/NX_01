@@ -8,6 +8,9 @@ Public NotInheritable Class ArrangeSettings
     Public Property Mode As ArrangeMode = ArrangeMode.Parallel
     Public Property Order As ArrangeOrder = ArrangeOrder.BySizeAscending
 
+    ''' <summary>병렬일 때 쌓는 쪽: 0 = 자동(형상 바깥쪽), +1 = 위/오른쪽, -1 = 아래/왼쪽</summary>
+    Public Property Side As Integer = 0
+
     ''' <summary>기준치수 방향을 판정하지 못했을 때 사용자가 고른 방향 (저장 안 함)</summary>
     Public Property Axis As StackAxis = StackAxis.Y
 
@@ -44,6 +47,8 @@ Public NotInheritable Class ArrangeSettings
                     s.Spacing = d
                 ElseIf key = "Mode" AndAlso Integer.TryParse(val, n) AndAlso [Enum].IsDefined(GetType(ArrangeMode), n) Then
                     s.Mode = CType(n, ArrangeMode)
+                ElseIf key = "Side" AndAlso Integer.TryParse(val, n) AndAlso n >= -1 AndAlso n <= 1 Then
+                    s.Side = n
                 ElseIf key = "Order" AndAlso Integer.TryParse(val, n) AndAlso [Enum].IsDefined(GetType(ArrangeOrder), n) Then
                     s.Order = CType(n, ArrangeOrder)
                 End If
@@ -60,7 +65,8 @@ Public NotInheritable Class ArrangeSettings
             File.WriteAllLines(FilePath, New String() {
                 "Spacing=" & Spacing.ToString(CultureInfo.InvariantCulture),
                 "Mode=" & CInt(Mode).ToString(CultureInfo.InvariantCulture),
-                "Order=" & CInt(Order).ToString(CultureInfo.InvariantCulture)
+                "Order=" & CInt(Order).ToString(CultureInfo.InvariantCulture),
+                "Side=" & Side.ToString(CultureInfo.InvariantCulture)
             })
         Catch
             ' 저장 실패는 기능에 영향 없음
