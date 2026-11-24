@@ -611,6 +611,67 @@ Friend NotInheritable Class ArrangeDimensionsCommand
     End Function
 
     ''' <summary>
+    ''' 뷰 기준 바깥쪽 판정: 치수가 붙어 있는 도면 뷰의 경계 중심보다 치수들이 어느 쪽에 있는지.
+    ''' (치수는 보통 뷰 형상 바깥에 배치되므로, 뷰 중심 반대쪽이 바깥)
+    ''' +1 / -1 / 0(판정 불가).
+    ''' </summary>
+    Private Function DetectOutwardSignByView(refDim As Dimension, targets As List(Of Dimension),
+                                             dir As StackDirection) As Integer
+        Try
+            Dim view As Drawings.DraftingView = FindDimensionView(refDim)
+            If view Is Nothing Then
+                Diag("  뷰 기준 판정: 기준치수의 도면 뷰를 찾지 못함")
+                Return 0
+            End If
+
+            ' UF_DRAW_ask_view_borders: 뷰 경계 (시트 좌표) xmin, ymin, xmax, ymax
+            Dim borders(3) As Double
+            _uf.Draw.AskViewBorders(view.Tag, borders)
+            Dim centerCoord As Double = dir.CoordOf((borders(0) + borders(2)) / 2, (borders(1) + borders(3)) / 2)
+            Dim lo As Double = Math.Min(dir.CoordOf(borders(0), borders(1)), dir.CoordOf(borders(2), borders(3)))
+            Dim hi As Double = Math.Max(dir.CoordOf(borders(0), borders(1)), dir.CoordOf(borders(2), borders(3)))
+
+            ' 기준치수 + 대상 치수 위치의 평균
+            Dim coords As New List(Of Double) From {Coord(refDim.AnnotationOrigin, dir)}
+            coords.AddRange(targets.Select(Function(t) Coord(t.AnnotationOrigin, dir)))
+            Dim dimCoord As Double = coords.Average()
+
+            Diag("  뷰 기준 판정: 뷰=" & view.Name & " 경계=[" & Math.Round(lo, 3) & " ~ " & Math.Round(hi, 3) &
+                 "], 중심=" & Math.Round(centerCoord, 3) & ", 치수 평균=" & Math.Round(dimCoord, 3))
+
+            Dim diff As Double = dimCoord - centerCoord
+            If Math.Abs(diff) < 0.000001 Then Return 0
+            Return Math.Sign(diff)
+        Catch ex As Exception
+            Diag("  뷰 기준 판정 오류: " & ex.Message)
+            Return 0
+        End Try
+    End Function
+
+    ''' <summary>치수의 연관 객체가 속한 도면 뷰 (없으면 Nothing)</summary>
+    Private Function FindDimensionView(d As Dimension) As Drawings.DraftingView
+        Dim b As LinearDimensionBuilder = Nothing
+        Try
+            ' 읽기만 하고 Commit 하지 않음
+            b = _workPart.Dimensions.CreateLinearDimensionBuilder(d)
+            For Each sel As SelectNXObject In New SelectNXObject() {b.FirstAssociativity, b.SecondAssociativity}
+                If sel Is Nothing Then Continue For
+                Dim obj As TaggedObject = Nothing
+                Dim view As View = Nothing
+                Dim pick As Point3d
+                sel.GetValue(obj, view, pick)
+                Dim dv = TryCast(view, Drawings.DraftingView)
+                If dv IsNot Nothing Then Return dv
+            Next
+        Catch ex As Exception
+            Diag("  치수 Tag=" & CULng(d.Tag) & " 뷰 찾기 오류: " & ex.Message)
+        Finally
+            If b IsNot Nothing Then b.Destroy()
+        End Try
+        Return Nothing
+    End Function
+
+    ''' <summary>
     ''' 형상 바깥쪽 판정: 기준치수가 측정하는 형상(연관 객체)의 위치보다 치수가 어느 쪽에 있는지.
     ''' +1 = 쌓는 방향 + 쪽이 바깥, -1 = - 쪽이 바깥, 0 = 판정 불가.
     ''' </summary>
@@ -706,12 +767,18 @@ Friend NotInheritable Class ArrangeDimensionsCommand
                 side = Math.Sign(settings.Side)
                 sideReason = "사용자 지정"
             Else
-                side = DetectOutwardSign(refDim, dir)
-                sideReason = "형상 바깥쪽 자동"
+                ' 1) 도면 뷰 경계 중심 기준: 치수들이 뷰 중심보다 위(+)에 있으면 위로 쌓음
+                side = DetectOutwardSignByView(refDim, targets, dir)
+                sideReason = "뷰 중심 기준 바깥쪽 자동"
                 If side = 0 Then
-                    ' 형상 위치를 못 읽으면 대상 치수가 더 많이 있는 쪽 (동수면 +)
-                    side = If(items.Sum(Function(x) Math.Sign(x.Offset)) < 0, -1, 1)
-                    sideReason = "형상 위치 판정 불가 → 대상 치수가 많은 쪽"
+                    ' 2) 측정 형상(모서리/곡선 끝점) 기준
+                    side = DetectOutwardSign(refDim, dir)
+                    sideReason = "측정 형상 기준 바깥쪽 자동"
+                End If
+                If side = 0 Then
+                    ' 3) 판정 불가: 위/오른쪽(+). 반대로 나오면 입력 창 "쌓는 쪽"을 직접 지정
+                    side = 1
+                    sideReason = "판정 불가 → 위/오른쪽(+) 기본값"
                 End If
             End If
         End If
